@@ -179,18 +179,48 @@ public class ClinicPackageController : ControllerBase
             using var transaction = await connection.BeginTransactionAsync();
             try
             {
-                // Create user_package record
+                // Cộng lượt còn lại từ gói cũ vào gói mới (mua thêm / nâng cấp)
+                var sumOldSql = @"
+                    SELECT COALESCE(SUM(RemainingAnalyses), 0)
+                    FROM user_packages
+                    WHERE ClinicId = @ClinicId AND UserId IS NULL
+                      AND IsActive = true AND COALESCE(IsDeleted, false) = false";
+                int oldRemaining = 0;
+                using (var sumCmd = new NpgsqlCommand(sumOldSql, connection, transaction))
+                {
+                    sumCmd.Parameters.AddWithValue("ClinicId", clinicId);
+                    var sumVal = await sumCmd.ExecuteScalarAsync();
+                    oldRemaining = sumVal != null && sumVal != DBNull.Value ? Convert.ToInt32(sumVal) : 0;
+                }
+
+                // Tắt gói cũ (chỉ giữ một gói active)
+                var deactivateSql = @"
+                    UPDATE user_packages
+                    SET IsActive = false, UpdatedDate = @UpdatedDate, UpdatedBy = @UpdatedBy
+                    WHERE ClinicId = @ClinicId AND UserId IS NULL
+                      AND IsActive = true AND COALESCE(IsDeleted, false) = false";
+                using (var deactivateCmd = new NpgsqlCommand(deactivateSql, connection, transaction))
+                {
+                    deactivateCmd.Parameters.AddWithValue("ClinicId", clinicId);
+                    deactivateCmd.Parameters.AddWithValue("UpdatedDate", DateTime.UtcNow.Date);
+                    deactivateCmd.Parameters.AddWithValue("UpdatedBy", clinicId);
+                    await deactivateCmd.ExecuteNonQueryAsync();
+                }
+
+                var totalRemaining = analysesIncluded + oldRemaining;
+
+                // Create user_package record (lượt mới = lượt gói mới + lượt còn từ gói cũ)
                 var userPackageId = Guid.NewGuid().ToString();
                 var now = DateTime.UtcNow;
                 var expiresAt = now.AddDays(validityDays);
 
                 var createPackageSql = @"
                     INSERT INTO user_packages (
-                        Id, PackageId, ClinicId, TotalAnalyses, UsedAnalyses, RemainingAnalyses,
-                        PurchasedAt, ExpiresAt, IsActive, CreatedDate, IsDeleted
+                        Id, UserId, PackageId, ClinicId, TotalAnalyses, UsedAnalyses, RemainingAnalyses,
+                        PurchasedAt, ExpiresAt, IsActive, CreatedDate, CreatedBy, IsDeleted
                     ) VALUES (
-                        @Id, @PackageId, @ClinicId, @TotalAnalyses, 0, @TotalAnalyses,
-                        @PurchasedAt, @ExpiresAt, true, @Now, false
+                        @Id, NULL, @PackageId, @ClinicId, @TotalAnalyses, 0, @RemainingAnalyses,
+                        @PurchasedAt, @ExpiresAt, true, @Now, @CreatedBy, false
                     )";
 
                 using (var cmd = new NpgsqlCommand(createPackageSql, connection, transaction))
@@ -198,10 +228,12 @@ public class ClinicPackageController : ControllerBase
                     cmd.Parameters.AddWithValue("Id", userPackageId);
                     cmd.Parameters.AddWithValue("PackageId", request.PackageId);
                     cmd.Parameters.AddWithValue("ClinicId", clinicId);
-                    cmd.Parameters.AddWithValue("TotalAnalyses", analysesIncluded);
+                    cmd.Parameters.AddWithValue("TotalAnalyses", totalRemaining);
+                    cmd.Parameters.AddWithValue("RemainingAnalyses", totalRemaining);
                     cmd.Parameters.AddWithValue("PurchasedAt", now);
                     cmd.Parameters.AddWithValue("ExpiresAt", expiresAt);
                     cmd.Parameters.AddWithValue("Now", now);
+                    cmd.Parameters.AddWithValue("CreatedBy", clinicId);
                     await cmd.ExecuteNonQueryAsync();
                 }
 
@@ -236,10 +268,11 @@ public class ClinicPackageController : ControllerBase
                 return Ok(new
                 {
                     success = true,
-                    message = $"Đã mua thành công gói {packageName}",
+                    message = $"Đã mua thành công gói {packageName}. Tổng lượt còn lại: {totalRemaining}",
                     userPackageId = userPackageId,
                     paymentId = paymentId,
                     analysesIncluded = analysesIncluded,
+                    remainingAnalyses = totalRemaining,
                     expiresAt = expiresAt.ToString("o")
                 });
             }

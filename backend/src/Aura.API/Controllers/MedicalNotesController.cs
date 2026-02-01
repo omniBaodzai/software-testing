@@ -135,6 +135,19 @@ public class MedicalNotesController : ControllerBase
                 }
             }
 
+            // PatientUserId must reference users(Id); if friend changed DB or ar.UserId is clinicId, use NULL
+            if (!string.IsNullOrWhiteSpace(patientUserId))
+            {
+                var userExistsSql = "SELECT 1 FROM users WHERE Id = @Id AND COALESCE(IsDeleted, false) = false LIMIT 1";
+                using var userExistsCmd = new NpgsqlCommand(userExistsSql, connection);
+                userExistsCmd.Parameters.AddWithValue("Id", patientUserId);
+                var exists = await userExistsCmd.ExecuteScalarAsync();
+                if (exists == null || exists == DBNull.Value)
+                {
+                    patientUserId = null;
+                }
+            }
+
             // Create medical note
             var noteId = Guid.NewGuid().ToString();
             var now = DateTime.UtcNow;
@@ -313,8 +326,8 @@ public class MedicalNotesController : ControllerBase
             using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            // Get non-private notes for this patient (kèm ViewedByPatientAt để badge "chưa xem")
-            var sql = @"
+            // Get non-private notes for this patient (ViewedByPatientAt optional if DB was changed)
+            var sqlWithViewed = @"
                 SELECT mn.Id, mn.ResultId, mn.PatientUserId, mn.DoctorId, 
                        COALESCE(d.FirstName || ' ' || d.LastName, d.Email) as DoctorName,
                        COALESCE(u.FirstName || ' ' || u.LastName, u.Email) as PatientName,
@@ -331,17 +344,52 @@ public class MedicalNotesController : ControllerBase
                 ORDER BY mn.CreatedDate DESC
                 LIMIT 100";
 
-            using var command = new NpgsqlCommand(sql, connection);
-            command.Parameters.AddWithValue("UserId", userId);
+            var sqlWithoutViewed = @"
+                SELECT mn.Id, mn.ResultId, mn.PatientUserId, mn.DoctorId, 
+                       COALESCE(d.FirstName || ' ' || d.LastName, d.Email) as DoctorName,
+                       COALESCE(u.FirstName || ' ' || u.LastName, u.Email) as PatientName,
+                       mn.NoteType, mn.NoteContent, mn.Diagnosis, mn.Prescription,
+                       mn.TreatmentPlan, mn.ClinicalObservations, mn.Severity,
+                       mn.FollowUpDate, mn.IsImportant, mn.IsPrivate, mn.CreatedDate, mn.CreatedBy,
+                       mn.UpdatedDate, mn.UpdatedBy
+                FROM medical_notes mn
+                INNER JOIN doctors d ON d.Id = mn.DoctorId
+                LEFT JOIN users u ON u.Id = mn.PatientUserId
+                WHERE mn.PatientUserId = @UserId
+                    AND COALESCE(mn.IsDeleted, false) = false
+                    AND COALESCE(mn.IsPrivate, false) = false
+                ORDER BY mn.CreatedDate DESC
+                LIMIT 100";
 
-            var notes = new List<MedicalNoteDto>();
-            using var reader = await command.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            try
             {
-                notes.Add(MapToDto(reader));
+                using var command = new NpgsqlCommand(sqlWithViewed, connection);
+                command.Parameters.AddWithValue("UserId", userId);
+                var notes = new List<MedicalNoteDto>();
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        notes.Add(MapToDto(reader));
+                    }
+                }
+                return Ok(notes);
             }
-
-            return Ok(notes);
+            catch (PostgresException pgEx) when (pgEx.SqlState == "42703")
+            {
+                _logger.LogWarning(pgEx, "Column ViewedByPatientAt may be missing in medical_notes, using fallback query");
+                using var fallbackCmd = new NpgsqlCommand(sqlWithoutViewed, connection);
+                fallbackCmd.Parameters.AddWithValue("UserId", userId);
+                var notesList = new List<MedicalNoteDto>();
+                using (var reader = await fallbackCmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        notesList.Add(MapToDto(reader));
+                    }
+                }
+                return Ok(notesList);
+            }
         }
         catch (Exception ex)
         {
@@ -402,7 +450,7 @@ public class MedicalNotesController : ControllerBase
             using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var sql = @"
+            var sqlWithViewed = @"
                 SELECT mn.Id, mn.ResultId, mn.PatientUserId, mn.DoctorId, 
                        COALESCE(d.FirstName || ' ' || d.LastName, d.Email) as DoctorName,
                        COALESCE(u.FirstName || ' ' || u.LastName, u.Email) as PatientName,
@@ -417,16 +465,42 @@ public class MedicalNotesController : ControllerBase
                     AND COALESCE(mn.IsDeleted, false) = false
                     AND COALESCE(mn.IsPrivate, false) = false";
 
-            using var command = new NpgsqlCommand(sql, connection);
-            command.Parameters.AddWithValue("Id", id);
-            command.Parameters.AddWithValue("UserId", userId);
+            var sqlWithoutViewed = @"
+                SELECT mn.Id, mn.ResultId, mn.PatientUserId, mn.DoctorId, 
+                       COALESCE(d.FirstName || ' ' || d.LastName, d.Email) as DoctorName,
+                       COALESCE(u.FirstName || ' ' || u.LastName, u.Email) as PatientName,
+                       mn.NoteType, mn.NoteContent, mn.Diagnosis, mn.Prescription,
+                       mn.TreatmentPlan, mn.ClinicalObservations, mn.Severity,
+                       mn.FollowUpDate, mn.IsImportant, mn.IsPrivate, mn.CreatedDate, mn.CreatedBy,
+                       mn.UpdatedDate, mn.UpdatedBy
+                FROM medical_notes mn
+                INNER JOIN doctors d ON d.Id = mn.DoctorId
+                LEFT JOIN users u ON u.Id = mn.PatientUserId
+                WHERE mn.Id = @Id AND mn.PatientUserId = @UserId
+                    AND COALESCE(mn.IsDeleted, false) = false
+                    AND COALESCE(mn.IsPrivate, false) = false";
 
-            using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return NotFound(new { message = "Không tìm thấy ghi chú" });
-
-            var note = MapToDto(reader);
-            return Ok(note);
+            try
+            {
+                using var command = new NpgsqlCommand(sqlWithViewed, connection);
+                command.Parameters.AddWithValue("Id", id);
+                command.Parameters.AddWithValue("UserId", userId);
+                using var reader = await command.ExecuteReaderAsync();
+                if (!await reader.ReadAsync())
+                    return NotFound(new { message = "Không tìm thấy ghi chú" });
+                return Ok(MapToDto(reader));
+            }
+            catch (PostgresException pgEx) when (pgEx.SqlState == "42703")
+            {
+                _logger.LogWarning(pgEx, "Column ViewedByPatientAt may be missing, using fallback for GetMyMedicalNoteById");
+                using var fallbackCmd = new NpgsqlCommand(sqlWithoutViewed, connection);
+                fallbackCmd.Parameters.AddWithValue("Id", id);
+                fallbackCmd.Parameters.AddWithValue("UserId", userId);
+                using var reader2 = await fallbackCmd.ExecuteReaderAsync();
+                if (!await reader2.ReadAsync())
+                    return NotFound(new { message = "Không tìm thấy ghi chú" });
+                return Ok(MapToDto(reader2));
+            }
         }
         catch (Exception ex)
         {
@@ -651,7 +725,7 @@ public class MedicalNotesController : ControllerBase
 
     private async Task<MedicalNoteDto?> GetNoteByIdInternal(NpgsqlConnection connection, string noteId, string doctorId)
     {
-        var sql = @"
+        var sqlWithViewed = @"
             SELECT mn.Id, mn.ResultId, mn.PatientUserId, mn.DoctorId, 
                    COALESCE(d.FirstName || ' ' || d.LastName, d.Email, 'Bác sĩ') as DoctorName,
                    COALESCE(u.FirstName || ' ' || u.LastName, u.Email, '') as PatientName,
@@ -666,17 +740,43 @@ public class MedicalNotesController : ControllerBase
                 AND mn.DoctorId = @DoctorId
                 AND COALESCE(mn.IsDeleted, false) = false";
 
-        using var command = new NpgsqlCommand(sql, connection);
-        command.Parameters.AddWithValue("Id", noteId);
-        command.Parameters.AddWithValue("DoctorId", doctorId);
+        var sqlWithoutViewed = @"
+            SELECT mn.Id, mn.ResultId, mn.PatientUserId, mn.DoctorId, 
+                   COALESCE(d.FirstName || ' ' || d.LastName, d.Email, 'Bác sĩ') as DoctorName,
+                   COALESCE(u.FirstName || ' ' || u.LastName, u.Email, '') as PatientName,
+                   mn.NoteType, mn.NoteContent, mn.Diagnosis, mn.Prescription,
+                   mn.TreatmentPlan, mn.ClinicalObservations, mn.Severity,
+                   mn.FollowUpDate, mn.IsImportant, mn.IsPrivate, mn.CreatedDate, mn.CreatedBy,
+                   mn.UpdatedDate, mn.UpdatedBy
+            FROM medical_notes mn
+            LEFT JOIN doctors d ON d.Id = mn.DoctorId AND COALESCE(d.IsDeleted, false) = false
+            LEFT JOIN users u ON u.Id = mn.PatientUserId AND COALESCE(u.IsDeleted, false) = false
+            WHERE mn.Id = @Id
+                AND mn.DoctorId = @DoctorId
+                AND COALESCE(mn.IsDeleted, false) = false";
 
-        using var reader = await command.ExecuteReaderAsync();
-        if (!await reader.ReadAsync())
+        try
         {
-            return null;
+            using var command = new NpgsqlCommand(sqlWithViewed, connection);
+            command.Parameters.AddWithValue("Id", noteId);
+            command.Parameters.AddWithValue("DoctorId", doctorId);
+            using var reader = await command.ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+                return null;
+            return MapToDto(reader);
+        }
+        catch (PostgresException pgEx) when (pgEx.SqlState == "42703")
+        {
+            _logger.LogWarning(pgEx, "Column ViewedByPatientAt may be missing, using fallback for GetNoteByIdInternal");
         }
 
-        return MapToDto(reader);
+        using var fallbackCmd = new NpgsqlCommand(sqlWithoutViewed, connection);
+        fallbackCmd.Parameters.AddWithValue("Id", noteId);
+        fallbackCmd.Parameters.AddWithValue("DoctorId", doctorId);
+        using var reader2 = await fallbackCmd.ExecuteReaderAsync();
+        if (!await reader2.ReadAsync())
+            return null;
+        return MapToDto(reader2);
     }
 
     private static MedicalNoteDto MapToDto(NpgsqlDataReader reader)

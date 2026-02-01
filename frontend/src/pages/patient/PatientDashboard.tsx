@@ -917,22 +917,6 @@ const PatientDashboard = () => {
               </div>
             </div>
 
-            {/* Doctor Consultation CTA */}
-            <div className="bg-blue-600 rounded-xl p-5 text-white shadow-lg shadow-blue-500/20 relative overflow-hidden">
-              <div className="absolute -right-6 -bottom-6 text-white/10">
-                <svg className="w-28 h-28" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M19 3H5c-1.1 0-1.99.9-1.99 2L3 19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-1 11h-4v4h-4v-4H6v-4h4V6h4v4h4v4z"/>
-                </svg>
-              </div>
-              <h3 className="font-bold text-lg mb-1 relative z-10">Cần tư vấn bác sĩ?</h3>
-              <p className="text-blue-100 text-sm mb-4 relative z-10">Chia sẻ báo cáo AI của bạn trực tiếp với phòng khám của Bác sĩ Tâm.</p>
-              <button className="bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-semibold py-2 px-4 rounded-lg backdrop-blur-sm transition-colors relative z-10 flex items-center gap-2">
-                Chia sẻ báo cáo
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              </button>
-            </div>
           </div>
         </div>
       </main>

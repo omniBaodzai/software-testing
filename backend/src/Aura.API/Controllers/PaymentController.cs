@@ -461,6 +461,33 @@ public class PaymentController : ControllerBase
                     using var transaction = await connection.BeginTransactionAsync();
                     try
                     {
+                        // Cộng lượt còn lại từ gói cũ vào gói mới (nếu mua thêm / nâng cấp gói)
+                        var remainingFromOldSql = @"
+                            SELECT COALESCE(SUM(RemainingAnalyses), 0)
+                            FROM user_packages
+                            WHERE UserId IS NOT DISTINCT FROM @UserId
+                              AND ClinicId IS NOT DISTINCT FROM @ClinicId
+                              AND IsActive = true
+                              AND COALESCE(IsDeleted, false) = false";
+                        using var sumCmd = new NpgsqlCommand(remainingFromOldSql, connection, transaction);
+                        sumCmd.Parameters.AddWithValue("UserId", (object?)currentUserId ?? DBNull.Value);
+                        sumCmd.Parameters.AddWithValue("ClinicId", (object?)clinicId ?? DBNull.Value);
+                        var oldRemaining = Convert.ToInt32(await sumCmd.ExecuteScalarAsync() ?? 0);
+                        var totalRemaining = numberOfAnalyses + oldRemaining;
+
+                        // Tắt gói cũ (chỉ dùng một gói active)
+                        var deactivateOldSql = @"
+                            UPDATE user_packages
+                            SET IsActive = false, UpdatedDate = CURRENT_DATE, UpdatedBy = @UpdatedBy
+                            WHERE UserId IS NOT DISTINCT FROM @UserId
+                              AND ClinicId IS NOT DISTINCT FROM @ClinicId
+                              AND IsActive = true AND COALESCE(IsDeleted, false) = false";
+                        using var deactivateCmd = new NpgsqlCommand(deactivateOldSql, connection, transaction);
+                        deactivateCmd.Parameters.AddWithValue("UserId", (object?)currentUserId ?? DBNull.Value);
+                        deactivateCmd.Parameters.AddWithValue("ClinicId", (object?)clinicId ?? DBNull.Value);
+                        deactivateCmd.Parameters.AddWithValue("UpdatedBy", currentUserId ?? clinicId ?? "system");
+                        await deactivateCmd.ExecuteNonQueryAsync();
+
                         var userPackageSql = @"
                             INSERT INTO user_packages
                             (Id, UserId, ClinicId, PackageId, RemainingAnalyses, PurchasedAt, ExpiresAt,
@@ -474,7 +501,7 @@ public class PaymentController : ControllerBase
                         userPackageCmd.Parameters.AddWithValue("UserId", (object?)currentUserId ?? DBNull.Value);
                         userPackageCmd.Parameters.AddWithValue("ClinicId", (object?)clinicId ?? DBNull.Value);
                         userPackageCmd.Parameters.AddWithValue("PackageId", packageId);
-                        userPackageCmd.Parameters.AddWithValue("RemainingAnalyses", numberOfAnalyses);
+                        userPackageCmd.Parameters.AddWithValue("RemainingAnalyses", totalRemaining);
                         userPackageCmd.Parameters.AddWithValue("PurchasedAt", DateTime.UtcNow);
                         userPackageCmd.Parameters.AddWithValue("ExpiresAt", (object?)expiresAt ?? DBNull.Value);
                         userPackageCmd.Parameters.AddWithValue("CreatedDate", DateTime.UtcNow.Date);
@@ -858,6 +885,32 @@ public class PaymentController : ControllerBase
                         using var transaction = await connection.BeginTransactionAsync();
                         try
                         {
+                            // Cộng lượt còn lại từ gói cũ vào gói mới
+                            var remainingFromOldSql = @"
+                                SELECT COALESCE(SUM(RemainingAnalyses), 0)
+                                FROM user_packages
+                                WHERE UserId IS NOT DISTINCT FROM @UserId
+                                  AND ClinicId IS NOT DISTINCT FROM @ClinicId
+                                  AND IsActive = true
+                                  AND COALESCE(IsDeleted, false) = false";
+                            using var sumCmd = new NpgsqlCommand(remainingFromOldSql, connection, transaction);
+                            sumCmd.Parameters.AddWithValue("UserId", (object?)userId ?? DBNull.Value);
+                            sumCmd.Parameters.AddWithValue("ClinicId", (object?)clinicId ?? DBNull.Value);
+                            var oldRemaining = Convert.ToInt32(await sumCmd.ExecuteScalarAsync() ?? 0);
+                            var totalRemaining = numberOfAnalyses + oldRemaining;
+
+                            var deactivateOldSql = @"
+                                UPDATE user_packages
+                                SET IsActive = false, UpdatedDate = CURRENT_DATE, UpdatedBy = @UpdatedBy
+                                WHERE UserId IS NOT DISTINCT FROM @UserId
+                                  AND ClinicId IS NOT DISTINCT FROM @ClinicId
+                                  AND IsActive = true AND COALESCE(IsDeleted, false) = false";
+                            using var deactivateCmd = new NpgsqlCommand(deactivateOldSql, connection, transaction);
+                            deactivateCmd.Parameters.AddWithValue("UserId", (object?)userId ?? DBNull.Value);
+                            deactivateCmd.Parameters.AddWithValue("ClinicId", (object?)clinicId ?? DBNull.Value);
+                            deactivateCmd.Parameters.AddWithValue("UpdatedBy", userId ?? clinicId ?? "system");
+                            await deactivateCmd.ExecuteNonQueryAsync();
+
                             var userPackageSql = @"
                                 INSERT INTO user_packages
                                 (Id, UserId, ClinicId, PackageId, RemainingAnalyses, PurchasedAt, ExpiresAt,
@@ -871,7 +924,7 @@ public class PaymentController : ControllerBase
                             userPackageCmd.Parameters.AddWithValue("UserId", (object?)userId ?? DBNull.Value);
                             userPackageCmd.Parameters.AddWithValue("ClinicId", (object?)clinicId ?? DBNull.Value);
                             userPackageCmd.Parameters.AddWithValue("PackageId", packageId);
-                            userPackageCmd.Parameters.AddWithValue("RemainingAnalyses", numberOfAnalyses);
+                            userPackageCmd.Parameters.AddWithValue("RemainingAnalyses", totalRemaining);
                             userPackageCmd.Parameters.AddWithValue("PurchasedAt", DateTime.UtcNow);
                             userPackageCmd.Parameters.AddWithValue("ExpiresAt", (object?)expiresAt ?? DBNull.Value);
                             userPackageCmd.Parameters.AddWithValue("CreatedDate", DateTime.UtcNow.Date);

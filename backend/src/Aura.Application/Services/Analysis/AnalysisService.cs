@@ -1117,7 +1117,7 @@ public class AnalysisService : IAnalysisService
         using var connection = new Npgsql.NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        // Nếu userId thuộc bảng clinics → đây là phân tích từ phía phòng khám, không dùng user_packages
+        // Nếu userId thuộc bảng clinics → trừ credits từ user_packages có ClinicId = userId
         try
         {
             var clinicCheckSql = "SELECT 1 FROM clinics WHERE Id = @Id AND IsDeleted = false";
@@ -1127,15 +1127,13 @@ public class AnalysisService : IAnalysisService
                 var clinicExists = await clinicCmd.ExecuteScalarAsync();
                 if (clinicExists != null)
                 {
-                    _logger?.LogInformation("Skip user_packages credits check for clinic user {ClinicId}", userId);
-                    return true;
+                    return await CheckAndDeductClinicCreditsAsync(connection, userId, creditsNeeded);
                 }
             }
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Error checking clinic id {UserId} when validating credits", userId);
-            // Nếu lỗi khi kiểm tra clinic, tiếp tục fallback sang cơ chế user_packages
         }
 
         // Kiểm tra xem user có package đang hoạt động với số lượt còn lại > 0 không
@@ -1216,6 +1214,72 @@ public class AnalysisService : IAnalysisService
 
             _logger?.LogInformation("Package {UserPackageId} đã được tắt tự động vì hết lượt (remainingAnalyses = {Remaining})", 
                 userPackageId, newRemainingCount);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Trừ credits cho phòng khám (user_packages có ClinicId, UserId NULL).
+    /// </summary>
+    private async Task<bool> CheckAndDeductClinicCreditsAsync(NpgsqlConnection connection, string clinicId, int creditsNeeded)
+    {
+        var checkSql = @"
+            SELECT Id, RemainingAnalyses
+            FROM user_packages
+            WHERE ClinicId = @ClinicId AND UserId IS NULL
+                AND COALESCE(IsDeleted, false) = false
+                AND IsActive = true
+                AND RemainingAnalyses > 0
+                AND RemainingAnalyses >= @CreditsNeeded
+            ORDER BY ExpiresAt DESC NULLS LAST, PurchasedAt DESC
+            LIMIT 1";
+
+        using var checkCmd = new Npgsql.NpgsqlCommand(checkSql, connection);
+        checkCmd.Parameters.AddWithValue("ClinicId", clinicId);
+        checkCmd.Parameters.AddWithValue("CreditsNeeded", creditsNeeded);
+
+        using var checkReader = await checkCmd.ExecuteReaderAsync();
+        if (!await checkReader.ReadAsync())
+        {
+            _logger?.LogWarning("Clinic {ClinicId} không có đủ credits để phân tích (cần {CreditsNeeded} lượt)", clinicId, creditsNeeded);
+            return false;
+        }
+
+        var userPackageId = checkReader.GetString(0);
+        checkReader.Close();
+
+        var deductSql = @"
+            UPDATE user_packages
+            SET RemainingAnalyses = RemainingAnalyses - @CreditsNeeded,
+                UpdatedDate = CURRENT_DATE
+            WHERE Id = @UserPackageId
+                AND RemainingAnalyses >= @CreditsNeeded
+                AND IsActive = true
+                AND COALESCE(IsDeleted, false) = false
+            RETURNING RemainingAnalyses";
+
+        using var deductCmd = new Npgsql.NpgsqlCommand(deductSql, connection);
+        deductCmd.Parameters.AddWithValue("UserPackageId", userPackageId);
+        deductCmd.Parameters.AddWithValue("CreditsNeeded", creditsNeeded);
+
+        var newRemaining = await deductCmd.ExecuteScalarAsync();
+        if (newRemaining == null)
+        {
+            _logger?.LogWarning("Không thể trừ credits cho clinic {ClinicId}, package {UserPackageId}", clinicId, userPackageId);
+            return false;
+        }
+
+        var newRemainingCount = Convert.ToInt32(newRemaining);
+        _logger?.LogInformation("Đã trừ {CreditsNeeded} lượt phân tích cho clinic {ClinicId}, package {UserPackageId}. Số lượt còn lại: {Remaining}",
+            creditsNeeded, clinicId, userPackageId, newRemainingCount);
+
+        if (newRemainingCount <= 0)
+        {
+            var deactivateSql = "UPDATE user_packages SET IsActive = false, UpdatedDate = CURRENT_DATE WHERE Id = @UserPackageId";
+            using var deactivateCmd = new Npgsql.NpgsqlCommand(deactivateSql, connection);
+            deactivateCmd.Parameters.AddWithValue("UserPackageId", userPackageId);
+            await deactivateCmd.ExecuteNonQueryAsync();
         }
 
         return true;

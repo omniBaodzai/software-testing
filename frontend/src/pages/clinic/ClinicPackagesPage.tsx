@@ -78,15 +78,6 @@ const ClinicPackagesPage = () => {
     });
   };
 
-  const getDaysRemaining = (expiresAt?: string) => {
-    if (!expiresAt) return null;
-    const now = new Date();
-    const expires = new Date(expiresAt);
-    const diffTime = expires.getTime() - now.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <ClinicHeader />
@@ -113,13 +104,6 @@ const ClinicPackagesPage = () => {
                   <div>
                     <p className="text-indigo-100 text-sm mb-1">Gói hiện tại</p>
                     <h2 className="text-2xl font-bold">{currentPackage.packageName}</h2>
-                    <p className="text-indigo-100 mt-2">
-                      {getDaysRemaining(currentPackage.expiresAt) !== null && getDaysRemaining(currentPackage.expiresAt)! > 0
-                        ? `Còn ${getDaysRemaining(currentPackage.expiresAt)} ngày`
-                        : currentPackage.expiresAt
-                          ? `Hết hạn ngày ${formatDate(currentPackage.expiresAt)}`
-                          : 'Không giới hạn thời gian'}
-                    </p>
                   </div>
                   <div className="flex flex-col items-end">
                     <div className="text-4xl font-bold">{currentPackage.remainingAnalyses}</div>

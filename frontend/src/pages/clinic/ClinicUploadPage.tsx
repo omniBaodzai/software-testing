@@ -45,6 +45,15 @@ const ClinicUploadPage = () => {
     loadPackage();
   }, []);
 
+  // Refetch package when page gains focus (sau khi phân tích xong quay lại, lượt còn lại cập nhật mượt)
+  useEffect(() => {
+    const onFocus = () => {
+      if (clinicAuthService.isLoggedIn()) loadPackage();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
   useEffect(() => {
     (async () => {
       if (!clinicAuthService.isLoggedIn()) return;
@@ -83,15 +92,6 @@ const ClinicUploadPage = () => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const formatDate = (dateString?: string): string => {
-    if (!dateString) return "Không giới hạn";
-    return new Date(dateString).toLocaleDateString("vi-VN", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
   };
 
   const createPreview = (file: File): Promise<string> =>
@@ -271,12 +271,6 @@ const ClinicUploadPage = () => {
                       <p className="text-slate-600 dark:text-slate-400">Lượt còn lại</p>
                       <p className="font-bold text-xl text-blue-600 dark:text-blue-400">{activePackage.remainingAnalyses}</p>
                     </div>
-                    {activePackage.expiresAt && (
-                      <div>
-                        <p className="text-slate-600 dark:text-slate-400">Hết hạn</p>
-                        <p className="font-semibold text-slate-900 dark:text-white">{formatDate(activePackage.expiresAt)}</p>
-                      </div>
-                    )}
                     <div>
                       <p className="text-slate-600 dark:text-slate-400">Trạng thái</p>
                       <p className="font-semibold text-green-600 dark:text-green-400">Đang hoạt động</p>

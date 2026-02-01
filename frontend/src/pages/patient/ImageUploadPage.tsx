@@ -480,11 +480,11 @@ const ImageUploadPage = () => {
               </div>
             </div>
           ) : activePackage ? (
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl shadow-sm border border-blue-200 dark:border-blue-800 p-6">
+            <div className="bg-gradient-to-r from-amber-50/80 to-yellow-50/80 dark:from-amber-900/15 dark:to-yellow-900/15 rounded-xl shadow-sm border border-amber-200 dark:border-amber-800 p-6">
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-2">
-                    <svg className="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg className="w-5 h-5 text-amber-600 dark:text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <h3 className="font-bold text-lg text-slate-900 dark:text-white">
@@ -494,7 +494,7 @@ const ImageUploadPage = () => {
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
                     <div>
                       <p className="text-slate-600 dark:text-slate-400">Lượt còn lại</p>
-                      <p className="font-bold text-xl text-blue-600 dark:text-blue-400">
+                      <p className="font-bold text-xl text-amber-600 dark:text-amber-400">
                         {activePackage.remainingAnalyses}
                       </p>
                     </div>
@@ -515,22 +515,16 @@ const ImageUploadPage = () => {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => loadUserPackage(true)}
-                    disabled={loadingPackage}
-                    className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-                    title="Làm mới thông tin gói"
+                  <Link
+                    to="/packages"
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 shadow-sm border border-amber-600/30"
+                    title="Nâng cấp hoặc đổi gói dịch vụ"
                   >
-                    <svg 
-                      className={`w-4 h-4 ${loadingPackage ? 'animate-spin' : ''}`} 
-                      fill="none" 
-                      viewBox="0 0 24 24" 
-                      stroke="currentColor"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                     </svg>
-                    {loadingPackage ? 'Đang tải...' : 'Làm mới'}
-                  </button>
+                    Nâng cấp gói
+                  </Link>
                   {activePackage.remainingAnalyses <= 5 && (
                     <Link
                       to="/packages"
