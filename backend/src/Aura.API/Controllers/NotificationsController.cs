@@ -86,9 +86,10 @@ public class NotificationsController : ControllerBase
         Response.Headers.Append("Cache-Control", "no-cache");
         Response.Headers.Append("Content-Type", "text/event-stream");
 
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         await foreach (var n in _notifications.StreamForUserAsync(userId, ct))
         {
-            var json = JsonSerializer.Serialize(n);
+            var json = JsonSerializer.Serialize(n, jsonOptions);
             await Response.WriteAsync($"data: {json}\n\n", ct);
             await Response.Body.FlushAsync(ct);
         }

@@ -3,9 +3,37 @@ import type { Notification } from "../types/notification";
 
 const API_PREFIX = "/notifications"; // will be appended to baseURL from api
 
+/** Chuẩn hóa payload từ API/SSE (camelCase hoặc PascalCase) thành Notification */
+export function normalizeNotification(payload: unknown): Notification {
+  const p = payload as Record<string, unknown>;
+  const id = (p.id ?? p.Id) as string;
+  const title = (p.title ?? p.Title) as string;
+  const message = (p.message ?? p.Message) as string;
+  const read = Boolean(p.read ?? p.Read);
+  const createdAt = p.createdAt ?? p.CreatedAt;
+  let iso: string;
+  if (createdAt instanceof Date) {
+    iso = createdAt.toISOString();
+  } else if (typeof createdAt === "string") {
+    const d = new Date(createdAt);
+    iso = Number.isNaN(d.getTime()) ? new Date().toISOString() : createdAt;
+  } else {
+    iso = new Date().toISOString();
+  }
+  return {
+    id: id ?? "",
+    title: title ?? "",
+    message: message ?? "",
+    type: (p.type ?? p.Type) as string | undefined,
+    data: (p.data ?? p.Data) as Record<string, unknown> | undefined,
+    read,
+    createdAt: iso,
+  };
+}
+
 export async function fetchNotifications(): Promise<Notification[]> {
-  const res = await api.get<Notification[]>(API_PREFIX);
-  return res.data;
+  const res = await api.get<unknown[]>(API_PREFIX);
+  return (res.data ?? []).map(normalizeNotification);
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
@@ -32,7 +60,7 @@ export function connectNotificationsSSE(onMessage: (n: Notification) => void) {
     es.onmessage = (ev) => {
       try {
         const payload = JSON.parse(ev.data);
-        onMessage(payload);
+        onMessage(normalizeNotification(payload));
       } catch (e) {
         console.error("Invalid SSE notification payload", e);
       }

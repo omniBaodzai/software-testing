@@ -6,6 +6,7 @@ type State = {
   notifications: Notification[];
   unreadCount: number;
   load: () => Promise<void>;
+  setFromArray: (arr: Notification[]) => void;
   add: (n: Notification) => void;
   markRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
@@ -23,6 +24,10 @@ export const useNotificationStore = create<State>((set, get) => ({
     } catch (e) {
       console.warn('Failed to load notifications', e);
     }
+  },
+  setFromArray: (arr) => {
+    const unread = arr.filter((x) => !x.read).length;
+    set({ notifications: arr, unreadCount: unread });
   },
   add: (n) => {
     const prev = get().notifications;

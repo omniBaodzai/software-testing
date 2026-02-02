@@ -10,23 +10,27 @@ import medicalNotesService, {
 } from "../../services/medicalNotesService";
 import type { Notification } from "../../types/notification";
 
+/** Hiển thị thời gian dạng "X phút trước", "X giờ trước", "X ngày trước". Trả về "Vừa xong" nếu không có hoặc sai định dạng. */
 const timeAgo = (iso?: string) => {
-  if (!iso) return "";
+  if (!iso || typeof iso !== "string") return "Vừa xong";
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Vừa xong";
   const diff = Date.now() - d.getTime();
+  if (diff < 0) return "Vừa xong";
   const s = Math.floor(diff / 1000);
-  if (s < 60) return `${s}s`;
+  if (s < 60) return `${s} giây trước`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
+  if (m < 60) return `${m} phút trước`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
+  if (h < 24) return `${h} giờ trước`;
   const days = Math.floor(h / 24);
-  return `${days}d`;
+  if (days === 1) return "1 ngày trước";
+  return `${days} ngày trước`;
 };
 
 const NotificationBell: React.FC = () => {
   const navigate = useNavigate();
-  const { notifications, unreadCount, load, markRead, markAllRead, add } =
+  const { notifications, unreadCount, load, setFromArray, markRead, markAllRead, add } =
     useNotificationStore();
   const [open, setOpen] = useState(false);
   const [modalNotification, setModalNotification] =
@@ -38,19 +42,28 @@ const NotificationBell: React.FC = () => {
   useEffect(() => {
     load();
 
-    // Try SSE first
+    // Kết nối SSE để nhận thông báo real-time
     const es = connectNotificationsSSE((n: Notification) => {
       add(n);
     });
 
-    // If SSE not available, start polling
     let stopPolling: (() => void) | null = null;
-    if (!es) {
-      stopPolling = startPolling(() => {
-        // Replace local notifications with fetched ones; prefer server's order
-        // Here we simple set by calling load() which fetches via API
-        load();
+    const startPollingFallback = () => {
+      if (stopPolling) return;
+      stopPolling = startPolling((arr) => {
+        setFromArray(arr);
       });
+    };
+
+    if (!es) {
+      startPollingFallback();
+    } else {
+      const origOnError = es.onerror;
+      es.onerror = (ev) => {
+        origOnError?.call(es, ev);
+        // Khi SSE lỗi (vd. 401), fallback sang polling
+        startPollingFallback();
+      };
     }
 
     const onClick = (ev: MouseEvent) => {
@@ -64,14 +77,14 @@ const NotificationBell: React.FC = () => {
     document.addEventListener("click", onClick);
 
     return () => {
-      es?.close && es.close();
+      es?.close?.();
       if (stopPolling) stopPolling();
       document.removeEventListener("click", onClick);
     };
   }, []);
 
   const handleToggle = () => {
-    setOpen((v) => {
+    setOpen((v: boolean) => {
       const next = !v;
       // Khi mở dropdown: gọi lại API để danh sách và badge luôn đồng bộ
       if (next) load();

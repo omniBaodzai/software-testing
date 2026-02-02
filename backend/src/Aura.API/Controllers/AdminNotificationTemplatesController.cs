@@ -178,6 +178,7 @@ public class AdminNotificationTemplatesController : ControllerBase
                 { "analysisId", "AN-001" },
                 { "result", "Low Risk" },
                 { "date", DateTime.Now.ToString("dd/MM/yyyy") },
+                { "time", DateTime.Now.ToString("dd/MM/yyyy HH:mm") },
             };
 
             var title = template.TitleTemplate;
@@ -225,6 +226,7 @@ public class AdminNotificationTemplatesController : ControllerBase
                 { "analysisId", "" },
                 { "result", "" },
                 { "date", DateTime.Now.ToString("dd/MM/yyyy") },
+                { "time", DateTime.Now.ToString("dd/MM/yyyy HH:mm") },
             };
 
             var title = template.TitleTemplate;

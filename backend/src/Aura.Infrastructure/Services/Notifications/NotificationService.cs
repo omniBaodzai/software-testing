@@ -51,7 +51,7 @@ public class NotificationService : INotificationService
 
             var sql = @"
                 INSERT INTO notifications (Id, UserId, Title, Description, NotificationType, Note, IsRead, CreatedDate, IsDeleted)
-                VALUES (@Id, @UserId, @Title, @Description, @NotificationType, @Data, false, CURRENT_DATE, false)
+                VALUES (@Id, @UserId, @Title, @Description, @NotificationType, @Data, false, CURRENT_TIMESTAMP, false)
                 RETURNING Id, UserId, Title, Description, NotificationType, Note, IsRead, CreatedDate";
 
             using var command = new NpgsqlCommand(sql, connection);

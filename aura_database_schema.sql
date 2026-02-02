@@ -571,7 +571,7 @@ CREATE TABLE notifications (
     RelatedEntityId VARCHAR(255),
     IsRead BOOLEAN DEFAULT FALSE,
     ReadAt TIMESTAMP,
-    CreatedDate DATE,
+    CreatedDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CreatedBy VARCHAR(255),
     UpdatedDate DATE,
     UpdatedBy VARCHAR(255),
