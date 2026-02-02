@@ -6,11 +6,23 @@ import doctorService from '../../services/doctorService';
 import { useAuthStore } from '../../store/authStore';
 import toast from 'react-hot-toast';
 
+type ExportServiceLike = {
+  exportToPdf: (id: string) => Promise<{ exportId?: string; id?: string; fileName?: string; fileUrl?: string }>;
+  exportToCsv: (id: string) => Promise<{ exportId?: string; id?: string; fileName?: string; fileUrl?: string }>;
+  exportToJson: (id: string) => Promise<{ exportId?: string; id?: string; fileName?: string; fileUrl?: string }>;
+  downloadExport: (exportId: string) => Promise<Blob>;
+  downloadFile: (blob: Blob, fileName: string) => void;
+};
+
 interface AnalysisResultDisplayProps {
   result: AnalysisResult;
   onValidated?: () => void;
-  /** Ẩn phần xuất báo cáo (dùng khi hiển thị từ trang clinic) */
+  /** Ẩn phần xuất báo cáo */
   showExport?: boolean;
+  /** Dùng export service khác (vd. clinicExportService) - nếu không truyền thì dùng exportService mặc định */
+  exportService?: ExportServiceLike;
+  /** Link "Xem lịch sử xuất báo cáo" - mặc định /exports hoặc /doctor/exports */
+  exportHistoryLink?: string;
 }
 
 const AI_CORE_BASE_URL =
@@ -22,9 +34,11 @@ const resolveImageUrl = (path?: string | null) => {
   return `${AI_CORE_BASE_URL}${path}`;
 };
 
-const AnalysisResultDisplay = ({ result, onValidated, showExport = true }: AnalysisResultDisplayProps) => {
+const AnalysisResultDisplay = ({ result, onValidated, showExport = true, exportService: customExportService, exportHistoryLink }: AnalysisResultDisplayProps) => {
+  const exportSvc = customExportService ?? exportService;
   const { user } = useAuthStore();
   const isDoctor = user?.userType === 'Doctor';
+  const historyLink = exportHistoryLink ?? (isDoctor ? "/doctor/exports" : "/exports");
   const [exporting, setExporting] = useState<string | null>(null);
   
   // FR-15: Validate/Correct findings
@@ -91,13 +105,13 @@ const AnalysisResultDisplay = ({ result, onValidated, showExport = true }: Analy
       
       switch (format) {
         case 'pdf':
-          exportResult = await exportService.exportToPdf(result.id);
+          exportResult = await exportSvc.exportToPdf(result.id);
           break;
         case 'csv':
-          exportResult = await exportService.exportToCsv(result.id);
+          exportResult = await exportSvc.exportToCsv(result.id);
           break;
         case 'json':
-          exportResult = await exportService.exportToJson(result.id);
+          exportResult = await exportSvc.exportToJson(result.id);
           break;
       }
 
@@ -113,7 +127,7 @@ const AnalysisResultDisplay = ({ result, onValidated, showExport = true }: Analy
           throw new Error('Không tìm thấy mã báo cáo (exportId) trong phản hồi từ server');
         }
 
-        const blob = await exportService.downloadExport(exportId);
+        const blob = await exportSvc.downloadExport(exportId);
         if (!blob || blob.size === 0) {
           throw new Error('File download trống hoặc không hợp lệ');
         }
@@ -122,7 +136,7 @@ const AnalysisResultDisplay = ({ result, onValidated, showExport = true }: Analy
         const vnDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
         const dateStr = vnDate.toISOString().split('T')[0];
         const fileName = exportResult.fileName || `aura_report_${result.id.substring(0, 8)}_${dateStr}.${format}`;
-        exportService.downloadFile(blob, fileName);
+        exportSvc.downloadFile(blob, fileName);
         toast.success(`✅ Xuất ${format.toUpperCase()} thành công!`, { id: `export-${format}` });
       } catch (downloadError: any) {
         // Fallback: file đã lên Cloudinary thì tải trực tiếp từ fileUrl
@@ -506,7 +520,7 @@ const AnalysisResultDisplay = ({ result, onValidated, showExport = true }: Analy
         </div>
         <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-800">
           <Link
-            to={isDoctor ? "/doctor/exports" : "/exports"}
+            to={historyLink}
             className="text-sm text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
           >
             Xem lịch sử xuất báo cáo
