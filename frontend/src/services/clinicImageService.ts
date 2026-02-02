@@ -81,6 +81,12 @@ export interface ClinicAnalysisResult {
   detailedFindings?: Record<string, any>;
 }
 
+/** Lịch Sử Phân Tích - item có thêm patientName */
+export interface ClinicAnalysisReportItem extends ClinicAnalysisResult {
+  patientName?: string | null;
+  patientUserId?: string | null;
+}
+
 export interface QueueAnalysisRequest {
   imageIds: string[];
   batchId?: string;
@@ -223,6 +229,16 @@ const clinicImageService = {
   async getBatchStatus(batchId: string): Promise<BulkUploadBatchStatus> {
     const response = await clinicApi.get<BulkUploadBatchStatus>(
       `clinic/images/batches/${batchId}/status`
+    );
+    return response.data;
+  },
+
+  /**
+   * Lấy tất cả kết quả phân tích của phòng khám (Lịch Sử Phân Tích - giống user reports)
+   */
+  async getClinicAnalysisReports(): Promise<ClinicAnalysisReportItem[]> {
+    const response = await clinicApi.get<ClinicAnalysisReportItem[]>(
+      "clinic/images/analyses"
     );
     return response.data;
   },

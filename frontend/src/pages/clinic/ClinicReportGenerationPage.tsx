@@ -174,6 +174,15 @@ const ClinicReportGenerationPage = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
+          <button
+            onClick={() => navigate("/clinic/reports")}
+            className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white mb-4"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            Quay lại Lịch sử phân tích
+          </button>
           <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
             Tạo Báo Cáo
           </h1>

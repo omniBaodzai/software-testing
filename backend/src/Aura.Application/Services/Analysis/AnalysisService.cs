@@ -1058,7 +1058,7 @@ public class AnalysisService : IAnalysisService
                 ar.DetailedFindings
             FROM analysis_results ar
             INNER JOIN retinal_images ri ON ar.ImageId = ri.Id
-            WHERE ar.UserId = @UserId AND ar.IsDeleted = false AND ri.IsDeleted = false
+            WHERE (ar.UserId = @UserId OR ri.UserId = @UserId) AND ar.IsDeleted = false AND ri.IsDeleted = false
             ORDER BY ar.AnalysisCompletedAt DESC NULLS LAST, ar.AnalysisStartedAt DESC";
 
         using var command = new Npgsql.NpgsqlCommand(sql, connection);

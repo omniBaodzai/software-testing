@@ -29,6 +29,7 @@ import ClinicPatientsPage from "../pages/clinic/ClinicPatientsPage";
 import ClinicPackagesPage from "../pages/clinic/ClinicPackagesPage";
 import PatientReportsPage from "../pages/patient/PatientReportsPage";
 import PatientNotesPage from "../pages/patient/PatientNotesPage";
+import ClinicReportsPage from "../pages/clinic/ClinicReportsPage";
 import ClinicReportGenerationPage from "../pages/clinic/ClinicReportGenerationPage";
 import PackagesPage from "../pages/patient/PackagesPage";
 import ExportHistoryPage from "../pages/patient/ExportHistoryPage";
@@ -340,7 +341,8 @@ const AppRoutes = () => {
         <Route path="/clinic/alerts" element={<ClinicAlertsPage />} />
         <Route path="/clinic/patient-trend/:patientUserId" element={<PatientTrendPage />} />
         <Route path="/clinic/usage-dashboard" element={<ClinicUsageDashboardPage />} />
-        <Route path="/clinic/reports" element={<ClinicReportGenerationPage />} />
+        <Route path="/clinic/reports" element={<ClinicReportsPage />} />
+        <Route path="/clinic/reports/create" element={<ClinicReportGenerationPage />} />
 
         {/* Doctor routes */}
         <Route

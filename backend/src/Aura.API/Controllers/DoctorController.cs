@@ -228,8 +228,9 @@ public class DoctorController : ControllerBase
             // 1. TotalPatients: Đếm số bệnh nhân được assign cho bác sĩ này
             // 2. ActiveAssignments: Đếm số bệnh nhân đang active
             // 3. TotalAnalyses: Đếm tất cả phân tích của các bệnh nhân được assign
+            //    - ar.UserId = patient (patient tự phân tích) HOẶC ri.UserId = patient (clinic phân tích cho patient)
             // 4. PendingAnalyses: Đếm phân tích có status = 'Pending'
-            // 5. MedicalNotesCount: Đếm tất cả ghi chú y tế của bác sĩ này (không chỉ của bệnh nhân được assign)
+            // 5. MedicalNotesCount: Đếm tất cả ghi chú y tế của bác sĩ này
             var sql = @"
                 WITH assigned_patients AS (
                     SELECT DISTINCT UserId
@@ -250,13 +251,15 @@ public class DoctorController : ControllerBase
                     COALESCE((
                         SELECT COUNT(DISTINCT ar.Id)
                         FROM analysis_results ar
-                        INNER JOIN assigned_patients ap ON ap.UserId = ar.UserId
+                        INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                        INNER JOIN assigned_patients ap ON (ap.UserId = ar.UserId OR ap.UserId = ri.UserId)
                         WHERE COALESCE(ar.IsDeleted, false) = false
                     ), 0) as TotalAnalyses,
                     COALESCE((
                         SELECT COUNT(DISTINCT ar.Id)
                         FROM analysis_results ar
-                        INNER JOIN assigned_patients ap ON ap.UserId = ar.UserId
+                        INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                        INNER JOIN assigned_patients ap ON (ap.UserId = ar.UserId OR ap.UserId = ri.UserId)
                         WHERE ar.AnalysisStatus = 'Pending'
                             AND COALESCE(ar.IsDeleted, false) = false
                     ), 0) as PendingAnalyses,
@@ -276,7 +279,8 @@ public class DoctorController : ControllerBase
                         COALESCE((
                             SELECT MAX(ar.CreatedDate)
                             FROM analysis_results ar
-                            INNER JOIN assigned_patients ap ON ap.UserId = ar.UserId
+                            INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                            INNER JOIN assigned_patients ap ON (ap.UserId = ar.UserId OR ap.UserId = ri.UserId)
                             WHERE COALESCE(ar.IsDeleted, false) = false
                         ), '1970-01-01'::timestamp),
                         COALESCE((
@@ -394,21 +398,24 @@ public class DoctorController : ControllerBase
                 SELECT 
                     u.Id, u.FirstName, u.LastName, u.Email, u.Phone, u.Dob, u.Gender, u.ProfileImageUrl,
                     pda.AssignedAt, pda.ClinicId, c.ClinicName,
-                    COUNT(DISTINCT ar.Id) as AnalysisCount,
+                    (SELECT COUNT(DISTINCT ar.Id) FROM analysis_results ar
+                     INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                     WHERE (ar.UserId = u.Id OR ri.UserId = u.Id) AND COALESCE(ar.IsDeleted, false) = false) as AnalysisCount,
                     (SELECT COUNT(*) FROM medical_notes mn2 
                      WHERE mn2.DoctorId = @DoctorId 
-                       AND (mn2.PatientUserId = u.Id OR mn2.ResultId IN (SELECT Id FROM analysis_results WHERE UserId = u.Id))
+                       AND (mn2.PatientUserId = u.Id OR mn2.ResultId IN (
+                         SELECT ar2.Id FROM analysis_results ar2 
+                         INNER JOIN retinal_images ri2 ON ri2.Id = ar2.ImageId 
+                         WHERE (ar2.UserId = u.Id OR ri2.UserId = u.Id)
+                       ))
                        AND COALESCE(mn2.IsDeleted, false) = false) as MedicalNotesCount
                 FROM patient_doctor_assignments pda
                 INNER JOIN users u ON u.Id = pda.UserId
                 LEFT JOIN clinics c ON c.Id = pda.ClinicId
-                LEFT JOIN analysis_results ar ON ar.UserId = u.Id
                 WHERE pda.DoctorId = @DoctorId 
                     AND COALESCE(pda.IsDeleted, false) = false
                     AND COALESCE(u.IsDeleted, false) = false
                     AND (@ActiveOnly IS NULL OR pda.IsActive = @ActiveOnly)
-                GROUP BY u.Id, u.FirstName, u.LastName, u.Email, u.Phone, u.Dob, u.Gender, 
-                         u.ProfileImageUrl, pda.AssignedAt, pda.ClinicId, c.ClinicName
                 ORDER BY pda.AssignedAt DESC";
 
             using var command = new NpgsqlCommand(sql, connection);
@@ -465,14 +472,21 @@ public class DoctorController : ControllerBase
 
             // Cho phép bác sĩ xem thông tin bất kỳ bệnh nhân nào,
             // nhưng chỉ hiển thị thông tin assign/ghi chú liên quan tới chính bác sĩ đó (nếu có).
+            // AnalysisCount: phân tích của patient (ar.UserId=patient hoặc ri.UserId=patient khi clinic làm)
             var sql = @"
                 SELECT 
                     u.Id, u.FirstName, u.LastName, u.Email, u.Phone, u.Dob, u.Gender, u.ProfileImageUrl,
                     pda.AssignedAt, pda.ClinicId, c.ClinicName,
-                    COUNT(DISTINCT ar.Id) as AnalysisCount,
+                    (SELECT COUNT(DISTINCT ar.Id) FROM analysis_results ar
+                     INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                     WHERE (ar.UserId = u.Id OR ri.UserId = u.Id) AND COALESCE(ar.IsDeleted, false) = false) as AnalysisCount,
                     (SELECT COUNT(*) FROM medical_notes mn2 
                      WHERE mn2.DoctorId = @DoctorId 
-                       AND (mn2.PatientUserId = u.Id OR mn2.ResultId IN (SELECT Id FROM analysis_results WHERE UserId = u.Id))
+                       AND (mn2.PatientUserId = u.Id OR mn2.ResultId IN (
+                         SELECT ar2.Id FROM analysis_results ar2 
+                         INNER JOIN retinal_images ri2 ON ri2.Id = ar2.ImageId 
+                         WHERE (ar2.UserId = u.Id OR ri2.UserId = u.Id)
+                       ))
                        AND COALESCE(mn2.IsDeleted, false) = false) as MedicalNotesCount
                 FROM users u
                 LEFT JOIN patient_doctor_assignments pda 
@@ -480,11 +494,8 @@ public class DoctorController : ControllerBase
                     AND pda.DoctorId = @DoctorId
                     AND COALESCE(pda.IsDeleted, false) = false
                 LEFT JOIN clinics c ON c.Id = pda.ClinicId
-                LEFT JOIN analysis_results ar ON ar.UserId = u.Id
                 WHERE u.Id = @PatientId
-                    AND COALESCE(u.IsDeleted, false) = false
-                GROUP BY u.Id, u.FirstName, u.LastName, u.Email, u.Phone, u.Dob, u.Gender, 
-                         u.ProfileImageUrl, pda.AssignedAt, pda.ClinicId, c.ClinicName";
+                    AND COALESCE(u.IsDeleted, false) = false";
 
             using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("DoctorId", doctorId);
@@ -549,11 +560,11 @@ public class DoctorController : ControllerBase
 
             if (hasSpecificPatient)
             {
-                // When specific patientId is provided, always filter by that patient only
-                // This is used for patient profile page to show only that patient's analyses
+                // When specific patientId is provided, filter by that patient only
+                // Include analyses where ar.UserId=patient (patient's own) OR ri.UserId=patient (clinic did for patient)
                 sql = @"
-                    SELECT ar.Id, ar.ImageId, ar.UserId,
-                           COALESCE(u.FirstName || ' ' || u.LastName, u.Email) AS PatientName,
+                    SELECT ar.Id, ar.ImageId, @PatientId AS UserId,
+                           (SELECT COALESCE(FirstName || ' ' || LastName, Email) FROM users WHERE Id = @PatientId) AS PatientName,
                            ar.AnalysisStatus, ar.OverallRiskLevel, ar.RiskScore,
                            COALESCE(ar.DiabeticRetinopathyDetected, false),
                            ar.AiConfidenceScore, ar.AnalysisCompletedAt,
@@ -563,10 +574,9 @@ public class DoctorController : ControllerBase
                            af.CreatedDate::timestamp AS ValidatedAt
                     FROM analysis_results ar
                     INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
-                    INNER JOIN users u ON u.Id = ar.UserId AND COALESCE(u.IsDeleted, false) = false
                     LEFT JOIN ai_feedback af ON af.ResultId = ar.Id AND af.DoctorId = @DoctorId AND COALESCE(af.IsDeleted, false) = false
                     WHERE COALESCE(ar.IsDeleted, false) = false
-                      AND ar.UserId = @PatientId
+                      AND (ar.UserId = @PatientId OR ri.UserId = @PatientId)
                     ORDER BY ar.AnalysisCompletedAt DESC NULLS LAST, ar.AnalysisStartedAt DESC NULLS LAST, ar.CreatedDate DESC NULLS LAST";
             }
             else
@@ -587,8 +597,9 @@ public class DoctorController : ControllerBase
                 if (patientIds.Count > 0)
                 {
                     sql = @"
-                        SELECT ar.Id, ar.ImageId, ar.UserId,
-                               COALESCE(u.FirstName || ' ' || u.LastName, u.Email) AS PatientName,
+                        SELECT ar.Id, ar.ImageId, 
+                               (CASE WHEN ri.UserId = ANY(@PatientIds) THEN ri.UserId ELSE ar.UserId END) AS UserId,
+                               COALESCE(up.FirstName || ' ' || up.LastName, up.Email) AS PatientName,
                                ar.AnalysisStatus, ar.OverallRiskLevel, ar.RiskScore,
                                COALESCE(ar.DiabeticRetinopathyDetected, false),
                                ar.AiConfidenceScore, ar.AnalysisCompletedAt,
@@ -598,10 +609,10 @@ public class DoctorController : ControllerBase
                                af.CreatedDate::timestamp AS ValidatedAt
                         FROM analysis_results ar
                         INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
-                        INNER JOIN users u ON u.Id = ar.UserId AND COALESCE(u.IsDeleted, false) = false
+                        LEFT JOIN users up ON up.Id = CASE WHEN ri.UserId = ANY(@PatientIds) THEN ri.UserId ELSE ar.UserId END AND COALESCE(up.IsDeleted, false) = false
                         LEFT JOIN ai_feedback af ON af.ResultId = ar.Id AND af.DoctorId = @DoctorId AND COALESCE(af.IsDeleted, false) = false
                         WHERE COALESCE(ar.IsDeleted, false) = false
-                          AND ar.UserId = ANY(@PatientIds)
+                          AND (ar.UserId = ANY(@PatientIds) OR ri.UserId = ANY(@PatientIds))
                         ORDER BY ar.AnalysisCompletedAt DESC NULLS LAST, ar.AnalysisStartedAt DESC NULLS LAST, ar.CreatedDate DESC NULLS LAST";
                 }
                 else
@@ -722,8 +733,9 @@ public class DoctorController : ControllerBase
             if (hasAssignments)
             {
                 var sql = @"
-                    SELECT ar.UserId FROM analysis_results ar
-                    INNER JOIN patient_doctor_assignments pda ON pda.UserId = ar.UserId
+                    SELECT COALESCE(ri.UserId, ar.UserId) FROM analysis_results ar
+                    INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                    INNER JOIN patient_doctor_assignments pda ON (pda.UserId = ar.UserId OR pda.UserId = ri.UserId)
                     WHERE ar.Id = @AnalysisId 
                         AND pda.DoctorId = @DoctorId
                         AND COALESCE(pda.IsDeleted, false) = false

@@ -330,15 +330,18 @@ const ClinicDoctorsPage = () => {
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Mật khẩu (nếu tạo tài khoản mới)
+                  Mật khẩu (tùy chọn)
                 </label>
                 <input
                   type="password"
                   value={newDoctor.password}
                   onChange={(e) => setNewDoctor({ ...newDoctor, password: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                  placeholder="Để trống nếu bác sĩ đã có tài khoản"
+                  placeholder="Nhập mật khẩu để tạo tài khoản đăng nhập"
                 />
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Nếu nhập mật khẩu, hệ thống sẽ tạo tài khoản để bác sĩ có thể đăng nhập vào trang của họ. Để trống nếu chỉ thêm vào phòng khám.
+                </p>
               </div>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input

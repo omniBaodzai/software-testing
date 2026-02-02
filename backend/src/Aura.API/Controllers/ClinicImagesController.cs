@@ -162,6 +162,111 @@ public class ClinicImagesController : ControllerBase
     }
 
     /// <summary>
+    /// Lấy tất cả kết quả phân tích của phòng khám (Lịch Sử Phân Tích - giống user reports)
+    /// </summary>
+    [HttpGet("analyses")]
+    [ProducesResponseType(typeof(List<ClinicAnalysisListItemDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetAllClinicAnalyses()
+    {
+        var clinicId = User.FindFirstValue("clinic_id") ??
+                       User.FindFirstValue("ClinicId") ??
+                       User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        if (string.IsNullOrEmpty(clinicId))
+            return Unauthorized(new { message = "Clinic ID not found" });
+
+        try
+        {
+            var connStr = _configuration.GetConnectionString("DefaultConnection");
+            if (string.IsNullOrEmpty(connStr))
+                return StatusCode(500, new { message = "DefaultConnection not configured" });
+
+            using var connection = new NpgsqlConnection(connStr);
+            await connection.OpenAsync();
+
+            var sql = @"
+                SELECT 
+                    ar.Id, ar.ImageId, ar.AnalysisStatus, ar.OverallRiskLevel, ar.RiskScore,
+                    ar.HypertensionRisk, ar.HypertensionScore,
+                    ar.DiabetesRisk, ar.DiabetesScore, ar.DiabeticRetinopathyDetected, ar.DiabeticRetinopathySeverity,
+                    ar.StrokeRisk, ar.StrokeScore,
+                    ar.VesselTortuosity, ar.VesselWidthVariation, ar.MicroaneurysmsCount, ar.HemorrhagesDetected, ar.ExudatesDetected,
+                    ar.AnnotatedImageUrl, ar.HeatmapUrl,
+                    ar.AiConfidenceScore,
+                    ar.Recommendations, ar.HealthWarnings,
+                    ar.ProcessingTimeSeconds, ar.AnalysisStartedAt, ar.AnalysisCompletedAt,
+                    ar.DetailedFindings,
+                    COALESCE(up.FirstName || ' ' || up.LastName, up.Email, 'Không xác định') as PatientName,
+                    ri.UserId as PatientUserId
+                FROM analysis_results ar
+                INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                LEFT JOIN users up ON up.Id = ri.UserId AND COALESCE(up.IsDeleted, false) = false
+                WHERE (ri.ClinicId = @ClinicId OR ar.UserId = @ClinicId)
+                  AND COALESCE(ar.IsDeleted, false) = false
+                ORDER BY ar.AnalysisCompletedAt DESC NULLS LAST, ar.AnalysisStartedAt DESC NULLS LAST, ar.CreatedDate DESC NULLS LAST";
+
+            using var cmd = new NpgsqlCommand(sql, connection);
+            cmd.Parameters.AddWithValue("ClinicId", clinicId);
+
+            var results = new List<ClinicAnalysisListItemDto>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                Dictionary<string, object>? detailed = null;
+                if (!reader.IsDBNull(26))
+                {
+                    try
+                    {
+                        var json = reader.GetString(26);
+                        detailed = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+                    }
+                    catch { detailed = null; }
+                }
+
+                results.Add(new ClinicAnalysisListItemDto
+                {
+                    Id = reader.GetString(0),
+                    ImageId = reader.GetString(1),
+                    AnalysisStatus = reader.GetString(2),
+                    OverallRiskLevel = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    RiskScore = reader.IsDBNull(4) ? null : reader.GetDecimal(4),
+                    HypertensionRisk = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    HypertensionScore = reader.IsDBNull(6) ? null : reader.GetDecimal(6),
+                    DiabetesRisk = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    DiabetesScore = reader.IsDBNull(8) ? null : reader.GetDecimal(8),
+                    DiabeticRetinopathyDetected = !reader.IsDBNull(9) && reader.GetBoolean(9),
+                    DiabeticRetinopathySeverity = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    StrokeRisk = reader.IsDBNull(11) ? null : reader.GetString(11),
+                    StrokeScore = reader.IsDBNull(12) ? null : reader.GetDecimal(12),
+                    VesselTortuosity = reader.IsDBNull(13) ? null : reader.GetDecimal(13),
+                    VesselWidthVariation = reader.IsDBNull(14) ? null : reader.GetDecimal(14),
+                    MicroaneurysmsCount = reader.IsDBNull(15) ? 0 : reader.GetInt32(15),
+                    HemorrhagesDetected = !reader.IsDBNull(16) && reader.GetBoolean(16),
+                    ExudatesDetected = !reader.IsDBNull(17) && reader.GetBoolean(17),
+                    AnnotatedImageUrl = reader.IsDBNull(18) ? null : reader.GetString(18),
+                    HeatmapUrl = reader.IsDBNull(19) ? null : reader.GetString(19),
+                    AiConfidenceScore = reader.IsDBNull(20) ? null : reader.GetDecimal(20),
+                    Recommendations = reader.IsDBNull(21) ? null : reader.GetString(21),
+                    HealthWarnings = reader.IsDBNull(22) ? null : reader.GetString(22),
+                    ProcessingTimeSeconds = reader.IsDBNull(23) ? null : reader.GetInt32(23),
+                    AnalysisStartedAt = reader.IsDBNull(24) ? null : reader.GetDateTime(24),
+                    AnalysisCompletedAt = reader.IsDBNull(25) ? null : reader.GetDateTime(25),
+                    DetailedFindings = detailed,
+                    PatientName = reader.IsDBNull(27) ? null : reader.GetString(27),
+                    PatientUserId = reader.IsDBNull(28) ? null : reader.GetString(28)
+                });
+            }
+
+            return Ok(results);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting clinic analyses for clinic {ClinicId}", clinicId);
+            return StatusCode(500, new { message = "Không thể lấy danh sách phân tích" });
+        }
+    }
+
+    /// <summary>
     /// List recent analysis jobs for the current clinic (dashboard)
     /// </summary>
     [HttpGet("analysis/jobs")]
@@ -548,6 +653,39 @@ public class ClinicImagesController : ControllerBase
         public List<string> ImageIds { get; set; } = new();
         public string? BatchId { get; set; }
     }
+}
+
+public class ClinicAnalysisListItemDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string ImageId { get; set; } = string.Empty;
+    public string AnalysisStatus { get; set; } = string.Empty;
+    public string? OverallRiskLevel { get; set; }
+    public decimal? RiskScore { get; set; }
+    public string? HypertensionRisk { get; set; }
+    public decimal? HypertensionScore { get; set; }
+    public string? DiabetesRisk { get; set; }
+    public decimal? DiabetesScore { get; set; }
+    public bool DiabeticRetinopathyDetected { get; set; }
+    public string? DiabeticRetinopathySeverity { get; set; }
+    public string? StrokeRisk { get; set; }
+    public decimal? StrokeScore { get; set; }
+    public decimal? VesselTortuosity { get; set; }
+    public decimal? VesselWidthVariation { get; set; }
+    public int MicroaneurysmsCount { get; set; }
+    public bool HemorrhagesDetected { get; set; }
+    public bool ExudatesDetected { get; set; }
+    public string? AnnotatedImageUrl { get; set; }
+    public string? HeatmapUrl { get; set; }
+    public decimal? AiConfidenceScore { get; set; }
+    public string? Recommendations { get; set; }
+    public string? HealthWarnings { get; set; }
+    public int? ProcessingTimeSeconds { get; set; }
+    public DateTime? AnalysisStartedAt { get; set; }
+    public DateTime? AnalysisCompletedAt { get; set; }
+    public Dictionary<string, object>? DetailedFindings { get; set; }
+    public string? PatientName { get; set; }
+    public string? PatientUserId { get; set; }
 }
 
 public class BulkUploadBatchStatusDto

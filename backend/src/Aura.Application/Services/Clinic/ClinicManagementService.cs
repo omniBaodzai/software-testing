@@ -253,6 +253,9 @@ public class ClinicManagementService : IClinicManagementService
                 existingDoctorId = await checkCmd.ExecuteScalarAsync() as string;
             }
 
+            // Check if password is provided (for creating account)
+            bool hasPassword = !string.IsNullOrWhiteSpace(dto.Password);
+
             using var transaction = await connection.BeginTransactionAsync();
             try
             {
@@ -332,7 +335,7 @@ public class ClinicManagementService : IClinicManagementService
                                     userCmd.Parameters.AddWithValue("Email", emailFromDoctor.ToLower());
                                     userCmd.Parameters.AddWithValue("Password", userPassword);
                                     userCmd.Parameters.AddWithValue("Phone", (object?)phoneFromDoctor ?? DBNull.Value);
-                                    userCmd.Parameters.AddWithValue("Now", DateTime.UtcNow.Date);
+                                    userCmd.Parameters.AddWithValue("Now", DateTime.UtcNow);
                                     await userCmd.ExecuteNonQueryAsync();
                                 }
                             }
@@ -343,9 +346,8 @@ public class ClinicManagementService : IClinicManagementService
                 }
                 else
                 {
-                    // Create new doctor account
+                    // Create new doctor account (hasPassword đã được khai báo ở đầu hàm)
                     doctorId = Guid.NewGuid().ToString();
-                    var passwordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password ?? "Aura@123");
                     var names = dto.FullName.Split(' ');
                     var firstName = names.Length > 0 ? names[0] : dto.FullName;
                     var lastName = names.Length > 1 ? string.Join(" ", names.Skip(1)) : "";
@@ -354,7 +356,19 @@ public class ClinicManagementService : IClinicManagementService
                         ? dto.LicenseNumber.Trim()
                         : ("PENDING-" + doctorId);
 
-                    // Also create a corresponding user account so doctor có thể login qua /login
+                    string passwordHash;
+                    if (hasPassword)
+                    {
+                        passwordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+                    }
+                    else
+                    {
+                        // Không có password: tạo password random và IsActive=false để không thể login
+                        passwordHash = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString());
+                    }
+
+                    // Also create a corresponding user account so doctor có thể login qua /login (nếu có password)
+                    var now = DateTime.UtcNow;
                     var createUserSql = @"
                         INSERT INTO users (
                             Id, FirstName, LastName, Email, Password, Phone,
@@ -362,7 +376,7 @@ public class ClinicManagementService : IClinicManagementService
                         )
                         VALUES (
                             @Id, @FirstName, @LastName, @Email, @Password, @Phone,
-                            'email', false, true, @Now, false
+                            'email', false, @IsActive, @Now, false
                         )";
 
                     using (var userCmd = new NpgsqlCommand(createUserSql, connection, transaction))
@@ -373,7 +387,8 @@ public class ClinicManagementService : IClinicManagementService
                         userCmd.Parameters.AddWithValue("Email", dto.Email.ToLower());
                         userCmd.Parameters.AddWithValue("Password", passwordHash);
                         userCmd.Parameters.AddWithValue("Phone", (object?)dto.Phone ?? DBNull.Value);
-                        userCmd.Parameters.AddWithValue("Now", DateTime.UtcNow.Date);
+                        userCmd.Parameters.AddWithValue("IsActive", hasPassword); // Chỉ active nếu có password
+                        userCmd.Parameters.AddWithValue("Now", now);
                         await userCmd.ExecuteNonQueryAsync();
                     }
 
@@ -391,8 +406,49 @@ public class ClinicManagementService : IClinicManagementService
                         cmd.Parameters.AddWithValue("Phone", (object?)dto.Phone ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("Specialization", (object?)dto.Specialization ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("LicenseNumber", licenseNumber);
-                        cmd.Parameters.AddWithValue("Now", DateTime.UtcNow.Date);
+                        cmd.Parameters.AddWithValue("Now", now);
                         await cmd.ExecuteNonQueryAsync();
+                    }
+
+                    // Assign Doctor role nếu có password
+                    if (hasPassword)
+                    {
+                        try
+                        {
+                            var getDoctorRoleSql = @"
+                                SELECT Id FROM roles 
+                                WHERE LOWER(RoleName) = 'doctor' AND COALESCE(IsDeleted, false) = false 
+                                LIMIT 1";
+                            
+                            string? doctorRoleId = null;
+                            using (var roleCmd = new NpgsqlCommand(getDoctorRoleSql, connection, transaction))
+                            {
+                                var roleResult = await roleCmd.ExecuteScalarAsync();
+                                doctorRoleId = roleResult?.ToString();
+                            }
+
+                            if (!string.IsNullOrEmpty(doctorRoleId))
+                            {
+                                var assignRoleSql = @"
+                                    INSERT INTO user_roles (Id, UserId, RoleId, IsPrimary, CreatedDate, IsDeleted)
+                                    VALUES (@Id, @UserId, @RoleId, true, @CreatedDate, false)
+                                    ON CONFLICT (UserId, RoleId) DO NOTHING";
+                                
+                                using (var assignCmd = new NpgsqlCommand(assignRoleSql, connection, transaction))
+                                {
+                                    assignCmd.Parameters.AddWithValue("Id", Guid.NewGuid().ToString());
+                                    assignCmd.Parameters.AddWithValue("UserId", doctorId);
+                                    assignCmd.Parameters.AddWithValue("RoleId", doctorRoleId);
+                                    assignCmd.Parameters.AddWithValue("CreatedDate", DateTime.UtcNow.Date);
+                                    await assignCmd.ExecuteNonQueryAsync();
+                                }
+                            }
+                        }
+                        catch (Exception roleEx)
+                        {
+                            // Log but don't fail registration if role assignment fails
+                            _logger?.LogWarning(roleEx, "Failed to assign Doctor role during clinic doctor registration for {DoctorId}", doctorId);
+                        }
                     }
                 }
 
@@ -415,7 +471,12 @@ public class ClinicManagementService : IClinicManagementService
                 await transaction.CommitAsync();
 
                 var doctor = await GetDoctorByIdAsync(clinicId, doctorId);
-                return (true, existingDoctorId != null ? "Đã thêm bác sĩ vào phòng khám" : "Đã tạo tài khoản và thêm bác sĩ vào phòng khám", doctor);
+                string message = existingDoctorId != null 
+                    ? "Đã thêm bác sĩ vào phòng khám" 
+                    : (hasPassword 
+                        ? "Đã tạo tài khoản và thêm bác sĩ vào phòng khám. Bác sĩ có thể đăng nhập bằng email và mật khẩu đã cung cấp." 
+                        : "Đã thêm bác sĩ vào phòng khám (chưa có tài khoản đăng nhập)");
+                return (true, message, doctor);
             }
             catch
             {
@@ -576,15 +637,15 @@ public class ClinicManagementService : IClinicManagementService
                  LIMIT 1) as AssignedDoctorName,
                 (SELECT COUNT(*) FROM analysis_results ar 
                  INNER JOIN retinal_images ri ON ri.Id = ar.ImageId
-                 WHERE ar.UserId = u.Id AND ri.ClinicId = @ClinicId AND ar.IsDeleted = false) as AnalysisCount,
+                 WHERE ri.UserId = u.Id AND ri.ClinicId = @ClinicId AND ar.IsDeleted = false) as AnalysisCount,
                 (SELECT ar.OverallRiskLevel FROM analysis_results ar 
                  INNER JOIN retinal_images ri ON ri.Id = ar.ImageId
-                 WHERE ar.UserId = u.Id AND ri.ClinicId = @ClinicId AND ar.IsDeleted = false AND ar.AnalysisStatus = 'Completed'
-                 ORDER BY ar.AnalysisCompletedAt DESC LIMIT 1) as LatestRiskLevel,
+                 WHERE ri.UserId = u.Id AND ri.ClinicId = @ClinicId AND ar.IsDeleted = false AND ar.AnalysisStatus = 'Completed'
+                 ORDER BY ar.AnalysisCompletedAt DESC NULLS LAST LIMIT 1) as LatestRiskLevel,
                 (SELECT ar.AnalysisCompletedAt FROM analysis_results ar 
                  INNER JOIN retinal_images ri ON ri.Id = ar.ImageId
-                 WHERE ar.UserId = u.Id AND ri.ClinicId = @ClinicId AND ar.IsDeleted = false AND ar.AnalysisStatus = 'Completed'
-                 ORDER BY ar.AnalysisCompletedAt DESC LIMIT 1) as LastAnalysisDate
+                 WHERE ri.UserId = u.Id AND ri.ClinicId = @ClinicId AND ar.IsDeleted = false AND ar.AnalysisStatus = 'Completed'
+                 ORDER BY ar.AnalysisCompletedAt DESC NULLS LAST LIMIT 1) as LastAnalysisDate
             FROM clinic_users cu
             INNER JOIN users u ON u.Id = cu.UserId
             WHERE cu.ClinicId = @ClinicId AND cu.IsDeleted = false AND u.IsDeleted = false";
@@ -673,6 +734,9 @@ public class ClinicManagementService : IClinicManagementService
                 existingUserId = await checkCmd.ExecuteScalarAsync() as string;
             }
 
+            // Check if password is provided (for creating account)
+            bool hasPassword = !string.IsNullOrWhiteSpace(dto.Password);
+
             using var transaction = await connection.BeginTransactionAsync();
             try
             {
@@ -696,30 +760,101 @@ public class ClinicManagementService : IClinicManagementService
                 }
                 else
                 {
-                    // Create new user account
-                    userId = Guid.NewGuid().ToString();
-                    var passwordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password ?? "Aura@123");
-                    var names = dto.FullName.Split(' ');
-                    var firstName = names.Length > 0 ? names[0] : dto.FullName;
-                    var lastName = names.Length > 1 ? string.Join(" ", names.Skip(1)) : "";
-
-                    var createUserSql = @"
-                        INSERT INTO users (Id, FirstName, LastName, Email, Password, Phone, Dob, Gender, Address, IsActive, AuthenticationProvider, CreatedDate, IsDeleted)
-                        VALUES (@Id, @FirstName, @LastName, @Email, @Password, @Phone, @Dob, @Gender, @Address, true, 'email', @Now, false)";
-                    
-                    using (var cmd = new NpgsqlCommand(createUserSql, connection, transaction))
+                    // Chỉ tạo user account nếu có password (hasPassword đã được khai báo ở đầu hàm)
+                    if (!hasPassword)
                     {
-                        cmd.Parameters.AddWithValue("Id", userId);
-                        cmd.Parameters.AddWithValue("FirstName", firstName);
-                        cmd.Parameters.AddWithValue("LastName", lastName);
-                        cmd.Parameters.AddWithValue("Email", dto.Email);
-                        cmd.Parameters.AddWithValue("Password", passwordHash);
-                        cmd.Parameters.AddWithValue("Phone", (object?)dto.Phone ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("Dob", (object?)dto.DateOfBirth ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("Gender", (object?)dto.Gender ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("Address", (object?)dto.Address ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("Now", DateTime.UtcNow);
-                        await cmd.ExecuteNonQueryAsync();
+                        // Không có password: không tạo account, chỉ thêm vào clinic_users sau khi tạo user placeholder
+                        // Tạo user với password random và IsActive=false để không thể login
+                        userId = Guid.NewGuid().ToString();
+                        var randomPassword = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString());
+                        var names = dto.FullName.Split(' ');
+                        var firstName = names.Length > 0 ? names[0] : dto.FullName;
+                        var lastName = names.Length > 1 ? string.Join(" ", names.Skip(1)) : "";
+
+                        var createUserSql = @"
+                            INSERT INTO users (Id, FirstName, LastName, Email, Password, Phone, Dob, Gender, Address, IsActive, AuthenticationProvider, CreatedDate, IsDeleted)
+                            VALUES (@Id, @FirstName, @LastName, @Email, @Password, @Phone, @Dob, @Gender, @Address, false, 'email', @Now, false)";
+                        
+                        using (var cmd = new NpgsqlCommand(createUserSql, connection, transaction))
+                        {
+                            cmd.Parameters.AddWithValue("Id", userId);
+                            cmd.Parameters.AddWithValue("FirstName", firstName);
+                            cmd.Parameters.AddWithValue("LastName", lastName);
+                            cmd.Parameters.AddWithValue("Email", dto.Email);
+                            cmd.Parameters.AddWithValue("Password", randomPassword);
+                            cmd.Parameters.AddWithValue("Phone", (object?)dto.Phone ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("Dob", (object?)dto.DateOfBirth ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("Gender", (object?)dto.Gender ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("Address", (object?)dto.Address ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("Now", DateTime.UtcNow);
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
+                    else
+                    {
+                        // Có password: tạo user account với password và assign Patient role
+                        userId = Guid.NewGuid().ToString();
+                        var passwordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+                        var names = dto.FullName.Split(' ');
+                        var firstName = names.Length > 0 ? names[0] : dto.FullName;
+                        var lastName = names.Length > 1 ? string.Join(" ", names.Skip(1)) : "";
+
+                        var createUserSql = @"
+                            INSERT INTO users (Id, FirstName, LastName, Email, Password, Phone, Dob, Gender, Address, IsActive, AuthenticationProvider, CreatedDate, IsDeleted)
+                            VALUES (@Id, @FirstName, @LastName, @Email, @Password, @Phone, @Dob, @Gender, @Address, true, 'email', @Now, false)";
+                        
+                        using (var cmd = new NpgsqlCommand(createUserSql, connection, transaction))
+                        {
+                            cmd.Parameters.AddWithValue("Id", userId);
+                            cmd.Parameters.AddWithValue("FirstName", firstName);
+                            cmd.Parameters.AddWithValue("LastName", lastName);
+                            cmd.Parameters.AddWithValue("Email", dto.Email);
+                            cmd.Parameters.AddWithValue("Password", passwordHash);
+                            cmd.Parameters.AddWithValue("Phone", (object?)dto.Phone ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("Dob", (object?)dto.DateOfBirth ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("Gender", (object?)dto.Gender ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("Address", (object?)dto.Address ?? DBNull.Value);
+                            cmd.Parameters.AddWithValue("Now", DateTime.UtcNow);
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+
+                        // Assign Patient role
+                        try
+                        {
+                            var getPatientRoleSql = @"
+                                SELECT Id FROM roles 
+                                WHERE LOWER(RoleName) = 'patient' AND COALESCE(IsDeleted, false) = false 
+                                LIMIT 1";
+                            
+                            string? patientRoleId = null;
+                            using (var roleCmd = new NpgsqlCommand(getPatientRoleSql, connection, transaction))
+                            {
+                                var roleResult = await roleCmd.ExecuteScalarAsync();
+                                patientRoleId = roleResult?.ToString();
+                            }
+
+                            if (!string.IsNullOrEmpty(patientRoleId))
+                            {
+                                var assignRoleSql = @"
+                                    INSERT INTO user_roles (Id, UserId, RoleId, IsPrimary, CreatedDate, IsDeleted)
+                                    VALUES (@Id, @UserId, @RoleId, true, @CreatedDate, false)
+                                    ON CONFLICT (UserId, RoleId) DO NOTHING";
+                                
+                                using (var assignCmd = new NpgsqlCommand(assignRoleSql, connection, transaction))
+                                {
+                                    assignCmd.Parameters.AddWithValue("Id", Guid.NewGuid().ToString());
+                                    assignCmd.Parameters.AddWithValue("UserId", userId);
+                                    assignCmd.Parameters.AddWithValue("RoleId", patientRoleId);
+                                    assignCmd.Parameters.AddWithValue("CreatedDate", DateTime.UtcNow.Date);
+                                    await assignCmd.ExecuteNonQueryAsync();
+                                }
+                            }
+                        }
+                        catch (Exception roleEx)
+                        {
+                            // Log but don't fail registration if role assignment fails
+                            _logger?.LogWarning(roleEx, "Failed to assign Patient role during clinic patient registration for {UserId}", userId);
+                        }
                     }
                 }
 
@@ -760,7 +895,12 @@ public class ClinicManagementService : IClinicManagementService
                 await transaction.CommitAsync();
 
                 var patient = await GetPatientByIdAsync(clinicId, userId);
-                return (true, existingUserId != null ? "Đã thêm bệnh nhân vào phòng khám" : "Đã tạo tài khoản và đăng ký bệnh nhân", patient);
+                string message = existingUserId != null 
+                    ? "Đã thêm bệnh nhân vào phòng khám" 
+                    : (hasPassword 
+                        ? "Đã tạo tài khoản và đăng ký bệnh nhân. Bệnh nhân có thể đăng nhập bằng email và mật khẩu đã cung cấp." 
+                        : "Đã đăng ký bệnh nhân vào phòng khám (chưa có tài khoản đăng nhập)");
+                return (true, message, patient);
             }
             catch
             {

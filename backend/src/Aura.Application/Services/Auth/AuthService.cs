@@ -1135,8 +1135,26 @@ public class AuthService : IAuthService
 
     private static bool VerifyPassword(string password, string hashedPassword)
     {
+        if (string.IsNullOrWhiteSpace(hashedPassword)) return false;
+
+        // Check SHA256 hash (legacy)
         var hash = HashPassword(password);
-        return hash == hashedPassword;
+        if (hash == hashedPassword) return true;
+
+        // Check BCrypt hash (new accounts created by clinic)
+        if (hashedPassword.StartsWith("$2") || hashedPassword.StartsWith("$2a") || hashedPassword.StartsWith("$2b"))
+        {
+            try
+            {
+                return BCrypt.Net.BCrypt.Verify(password, hashedPassword);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private static string GenerateRandomToken()

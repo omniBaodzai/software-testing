@@ -88,16 +88,20 @@ public class PatientSearchService : IPatientSearchService
             var sortDirection = searchDto.SortDirection?.ToLower() == "asc" ? "ASC" : "DESC";
 
             // Build SQL query with latest risk level subquery
+            // latest_risk: phân tích thuộc patient khi ar.UserId=patient hoặc ri.UserId=patient (clinic làm cho patient)
             var sql = $@"
-                WITH latest_risk AS (
-                    SELECT DISTINCT ON (ar.UserId)
-                        ar.UserId,
-                        ar.OverallRiskLevel,
-                        ar.RiskScore,
-                        ar.AnalysisCompletedAt
+                WITH patient_analyses AS (
+                    SELECT ar.Id, ar.OverallRiskLevel, ar.RiskScore, ar.AnalysisCompletedAt,
+                           CASE WHEN ri.UserId IN (SELECT Id FROM users) THEN ri.UserId ELSE ar.UserId END as PatientId
                     FROM analysis_results ar
-                    WHERE ar.AnalysisStatus = 'Completed'
-                    ORDER BY ar.UserId, ar.AnalysisCompletedAt DESC NULLS LAST
+                    INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                    WHERE ar.AnalysisStatus = 'Completed' AND COALESCE(ar.IsDeleted, false) = false
+                ),
+                latest_risk AS (
+                    SELECT DISTINCT ON (PatientId) PatientId as UserId, OverallRiskLevel, RiskScore, AnalysisCompletedAt
+                    FROM patient_analyses
+                    WHERE PatientId IN (SELECT Id FROM users)
+                    ORDER BY PatientId, AnalysisCompletedAt DESC NULLS LAST
                 )
                 SELECT 
                     u.Id, 
@@ -111,10 +115,16 @@ public class PatientSearchService : IPatientSearchService
                     pda.AssignedAt, 
                     pda.ClinicId, 
                     c.ClinicName,
-                    COUNT(DISTINCT ar.Id) as AnalysisCount,
+                    (SELECT COUNT(DISTINCT ar.Id) FROM analysis_results ar
+                     INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                     WHERE (ar.UserId = u.Id OR ri.UserId = u.Id) AND COALESCE(ar.IsDeleted, false) = false) as AnalysisCount,
                     (SELECT COUNT(*) FROM medical_notes mn2 
                      WHERE mn2.DoctorId = @DoctorId 
-                       AND (mn2.PatientUserId = u.Id OR mn2.ResultId IN (SELECT Id FROM analysis_results WHERE UserId = u.Id))
+                       AND (mn2.PatientUserId = u.Id OR mn2.ResultId IN (
+                         SELECT ar2.Id FROM analysis_results ar2 
+                         INNER JOIN retinal_images ri2 ON ri2.Id = ar2.ImageId 
+                         WHERE (ar2.UserId = u.Id OR ri2.UserId = u.Id)
+                       ))
                        AND COALESCE(mn2.IsDeleted, false) = false) as MedicalNotesCount,
                     latest_risk.OverallRiskLevel as LatestRiskLevel,
                     latest_risk.RiskScore as LatestRiskScore,
@@ -125,13 +135,8 @@ public class PatientSearchService : IPatientSearchService
                     AND pda.DoctorId = @DoctorId 
                     AND COALESCE(pda.IsDeleted, false) = false
                 LEFT JOIN clinics c ON c.Id = pda.ClinicId
-                LEFT JOIN analysis_results ar ON ar.UserId = u.Id
                 LEFT JOIN latest_risk ON latest_risk.UserId = u.Id
-                WHERE {whereClause}
-                GROUP BY 
-                    u.Id, u.FirstName, u.LastName, u.Email, u.Phone, u.Dob, u.Gender, 
-                    u.ProfileImageUrl, pda.AssignedAt, pda.ClinicId, c.ClinicName,
-                    latest_risk.OverallRiskLevel, latest_risk.RiskScore, latest_risk.AnalysisCompletedAt";
+                WHERE {whereClause}";
 
             // Add sorting
             sql += $" ORDER BY {sortBy} {sortDirection}";
@@ -181,13 +186,18 @@ public class PatientSearchService : IPatientSearchService
             var countWhereClause = string.Join(" AND ", countWhereConditions);
 
             var countSql = $@"
-                WITH latest_risk AS (
-                    SELECT DISTINCT ON (ar.UserId)
-                        ar.UserId,
-                        ar.OverallRiskLevel
+                WITH patient_analyses AS (
+                    SELECT ar.Id, ar.OverallRiskLevel, ar.AnalysisCompletedAt,
+                           CASE WHEN ri.UserId IN (SELECT Id FROM users) THEN ri.UserId ELSE ar.UserId END as PatientId
                     FROM analysis_results ar
-                    WHERE ar.AnalysisStatus = 'Completed'
-                    ORDER BY ar.UserId, ar.AnalysisCompletedAt DESC NULLS LAST
+                    INNER JOIN retinal_images ri ON ri.Id = ar.ImageId AND COALESCE(ri.IsDeleted, false) = false
+                    WHERE ar.AnalysisStatus = 'Completed' AND COALESCE(ar.IsDeleted, false) = false
+                ),
+                latest_risk AS (
+                    SELECT DISTINCT ON (PatientId) PatientId as UserId, OverallRiskLevel
+                    FROM patient_analyses
+                    WHERE PatientId IN (SELECT Id FROM users)
+                    ORDER BY PatientId, AnalysisCompletedAt DESC NULLS LAST
                 )
                 SELECT COUNT(DISTINCT u.Id)
                 FROM users u

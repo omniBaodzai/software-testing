@@ -306,11 +306,14 @@ public class UsageTrackingService : IUsageTrackingService
         }
         await imageReader.CloseAsync();
 
-        // Analysis counts
+        // Analysis counts (userId: include analyses where patient owns image ri.UserId, or did analysis ar.UserId)
+        var analysisFromJoin = userId != null
+            ? "FROM analysis_results ar INNER JOIN retinal_images ri ON ar.ImageId = ri.Id AND COALESCE(ri.IsDeleted, false) = false"
+            : "FROM analysis_results ar";
         var analysisWhereClause = "WHERE COALESCE(ar.IsDeleted, false) = false";
         if (userId != null)
         {
-            analysisWhereClause += " AND ar.UserId = @UserId";
+            analysisWhereClause += " AND (ar.UserId = @UserId OR ri.UserId = @UserId)";
         }
         if (clinicId != null)
         {
@@ -329,7 +332,7 @@ public class UsageTrackingService : IUsageTrackingService
                 COUNT(*) FILTER (WHERE ar.AnalysisStatus = 'Completed') as CompletedAnalyses,
                 COUNT(*) FILTER (WHERE ar.AnalysisStatus = 'Processing') as ProcessingAnalyses,
                 COUNT(*) FILTER (WHERE ar.AnalysisStatus = 'Failed') as FailedAnalyses
-            FROM analysis_results ar
+            {analysisFromJoin}
             {analysisWhereClause}";
 
         using var analysisCommand = new NpgsqlCommand(analysisSql, connection);
@@ -576,10 +579,13 @@ public class UsageTrackingService : IUsageTrackingService
     {
         var counts = new List<AnalysisCountByDateDto>();
 
+        var fromClause = userId != null
+            ? "FROM analysis_results ar INNER JOIN retinal_images ri ON ar.ImageId = ri.Id AND COALESCE(ri.IsDeleted, false) = false"
+            : "FROM analysis_results ar";
         var whereClause = "WHERE DATE(ar.AnalysisCompletedAt) >= @StartDate AND DATE(ar.AnalysisCompletedAt) <= @EndDate";
         if (userId != null)
         {
-            whereClause += " AND ar.UserId = @UserId";
+            whereClause += " AND (ar.UserId = @UserId OR ri.UserId = @UserId)";
         }
         if (clinicId != null)
         {
@@ -594,7 +600,7 @@ public class UsageTrackingService : IUsageTrackingService
                 COUNT(*) as Count,
                 COUNT(*) FILTER (WHERE ar.AnalysisStatus = 'Completed') as CompletedCount,
                 COUNT(*) FILTER (WHERE ar.AnalysisStatus = 'Failed') as FailedCount
-            FROM analysis_results ar
+            {fromClause}
             {whereClause}
             GROUP BY DATE(ar.AnalysisCompletedAt)
             ORDER BY DATE(ar.AnalysisCompletedAt)";
