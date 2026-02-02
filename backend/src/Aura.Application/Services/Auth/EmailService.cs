@@ -118,6 +118,32 @@ public class EmailService : IEmailService
         }
     }
 
+    /// <summary>
+    /// Gửi email tùy chỉnh, dùng cho email queue (thông báo hệ thống, báo cáo, v.v.)
+    /// </summary>
+    public async Task<bool> SendCustomEmailAsync(string email, string subject, string htmlBody)
+    {
+        try
+        {
+            if (_enableSmtp)
+            {
+                return await SendEmailAsync(email, subject, htmlBody);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Custom email (SMTP not configured) To={Email}, Subject={Subject}",
+                    email, subject);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send custom email to {Email}", email);
+            return false;
+        }
+    }
+
     private async Task<bool> SendEmailAsync(string toEmail, string subject, string htmlBody)
     {
         if (!_enableSmtp || string.IsNullOrWhiteSpace(_smtpHost) || string.IsNullOrWhiteSpace(_smtpUsername))
@@ -128,9 +154,14 @@ public class EmailService : IEmailService
 
         try
         {
+            // Log SMTP configuration (without password) for debugging
+            _logger.LogInformation("Attempting to send email via SMTP. Host: {Host}, Port: {Port}, Username: {Username}", 
+                _smtpHost, _smtpPort, _smtpUsername);
+            
             using var client = new SmtpClient(_smtpHost, _smtpPort)
             {
                 EnableSsl = _smtpPort == 587 || _smtpPort == 465,
+                UseDefaultCredentials = false, // Important: Don't use Windows credentials
                 Credentials = new NetworkCredential(_smtpUsername, _smtpPassword),
                 DeliveryMethod = SmtpDeliveryMethod.Network,
                 Timeout = 30000 // 30 seconds
@@ -194,7 +225,7 @@ public class EmailService : IEmailService
         </p>
         <hr style='border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;'>
         <p style='color: #94a3b8; font-size: 12px; text-align: center;'>
-            © 2024 AURA. Tuân thủ HIPAA.
+            © 2026 AURA. Tuân thủ HIPAA.
         </p>
     </div>
 </body>
@@ -231,7 +262,7 @@ public class EmailService : IEmailService
         </p>
         <hr style='border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;'>
         <p style='color: #94a3b8; font-size: 12px; text-align: center;'>
-            © 2024 AURA. Tuân thủ HIPAA.
+            © 2026 AURA. Tuân thủ HIPAA.
         </p>
     </div>
 </body>
@@ -266,7 +297,7 @@ public class EmailService : IEmailService
         </ul>
         <hr style='border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;'>
         <p style='color: #94a3b8; font-size: 12px; text-align: center;'>
-            © 2024 AURA. Tuân thủ HIPAA.
+            © 2026 AURA. Tuân thủ HIPAA.
         </p>
     </div>
 </body>

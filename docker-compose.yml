@@ -122,13 +122,13 @@ services:
       - Cloudinary__ApiKey=${CLOUDINARY_API_KEY:-882855471124966}
       - Cloudinary__ApiSecret=${CLOUDINARY_API_SECRET:-kYaflgrZrHYrOCYMb8J-JKkVgJU}
 
-      # Email Configuration
+      # Email Configuration (SendGrid SMTP)
       - Email__Provider=smtp
-      - Email__SmtpHost=smtp.gmail.com
+      - Email__SmtpHost=smtp.sendgrid.net
       - Email__SmtpPort=587
-      - Email__SmtpUsername=${SMTP_USERNAME:-}
+      - Email__SmtpUsername=${SMTP_USERNAME:-apikey}
       - Email__SmtpPassword=${SMTP_PASSWORD:-}
-      - Email__FromEmail=noreply@aura-health.com
+      - Email__FromEmail=${SENDGRID_FROM_EMAIL:-noreply@aura-health.com}
       - Email__FromName=AURA Health System
 
       # AI Core Service
