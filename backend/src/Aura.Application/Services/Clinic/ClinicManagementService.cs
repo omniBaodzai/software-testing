@@ -139,7 +139,12 @@ public class ClinicManagementService : IClinicManagementService
         using var cmd = new NpgsqlCommand(sql, connection);
         cmd.Parameters.AddWithValue("ClinicId", clinicId);
         cmd.Parameters.AddWithValue("Limit", limit);
-        cmd.Parameters.AddWithValue("Search", (object?)search ?? DBNull.Value);
+        // Fix parameter type inference issue: explicitly set type for nullable string
+        var searchParam = new NpgsqlParameter("Search", NpgsqlTypes.NpgsqlDbType.Text)
+        {
+            Value = (object?)search ?? DBNull.Value
+        };
+        cmd.Parameters.Add(searchParam);
 
         using var reader = await cmd.ExecuteReaderAsync();
         while (await reader.ReadAsync())

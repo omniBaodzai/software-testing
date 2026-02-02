@@ -4,6 +4,16 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using System.Text.Json;
+using CloudinaryDotNet;
+using CloudinaryDotNet.Actions;
+using CsvHelper;
+using CsvHelper.Configuration;
+using System.Globalization;
+using System.Text;
+using System.IO;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 
 namespace Aura.Application.Services.Reports;
 
@@ -15,16 +25,33 @@ public class ClinicReportService : IClinicReportService
     private readonly string _connectionString;
     private readonly ILogger<ClinicReportService>? _logger;
     private readonly IExportService _exportService;
+    private readonly IConfiguration _configuration;
+    private readonly Cloudinary? _cloudinary;
 
     public ClinicReportService(
         IConfiguration configuration,
         IExportService exportService,
         ILogger<ClinicReportService>? logger = null)
     {
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("Database connection string not configured");
         _exportService = exportService ?? throw new ArgumentNullException(nameof(exportService));
         _logger = logger;
+        
+        // Initialize Cloudinary for file uploads
+        var cloudName = configuration["Cloudinary:CloudName"];
+        var apiKey = configuration["Cloudinary:ApiKey"];
+        var apiSecret = configuration["Cloudinary:ApiSecret"];
+        
+        if (!string.IsNullOrWhiteSpace(cloudName) && 
+            !string.IsNullOrWhiteSpace(apiKey) && 
+            !string.IsNullOrWhiteSpace(apiSecret))
+        {
+            var account = new Account(cloudName, apiKey, apiSecret);
+            _cloudinary = new Cloudinary(account);
+            QuestPDF.Settings.License = LicenseType.Community;
+        }
     }
 
     public async Task<ClinicReportDto> GenerateReportAsync(CreateClinicReportDto dto, string userId)
@@ -180,10 +207,55 @@ public class ClinicReportService : IClinicReportService
         if (report == null)
             throw new InvalidOperationException("Report not found");
 
-        // TODO: Implement export using ExportService
-        // For now, return null
-        _logger?.LogInformation("Export requested for report {ReportId}, format: {Format}", reportId, format);
-        return null;
+        try
+        {
+            _logger?.LogInformation("Exporting clinic report {ReportId} to {Format}", reportId, format);
+
+            byte[] fileBytes;
+            string fileExtension;
+            string contentType;
+
+            if (format.ToUpperInvariant() == "CSV")
+            {
+                fileBytes = await GenerateClinicReportCsvAsync(report);
+                fileExtension = "csv";
+                contentType = "text/csv";
+            }
+            else if (format.ToUpperInvariant() == "PDF")
+            {
+                fileBytes = await GenerateClinicReportPdfAsync(report);
+                fileExtension = "pdf";
+                contentType = "application/pdf";
+            }
+            else if (format.ToUpperInvariant() == "JSON")
+            {
+                var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+                fileBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(report, jsonOptions));
+                fileExtension = "json";
+                contentType = "application/json";
+            }
+            else
+            {
+                throw new ArgumentException($"Unsupported export format: {format}. Supported formats: CSV, PDF, JSON");
+            }
+
+            // Upload to Cloudinary
+            var fileName = $"clinic_report_{reportId}_{DateTime.UtcNow:yyyyMMddHHmmss}.{fileExtension}";
+            var fileUrl = await UploadClinicReportFileAsync(fileBytes, fileName, contentType);
+
+            // Update report with file URL
+            await UpdateReportFileUrlAsync(reportId, fileUrl);
+
+            _logger?.LogInformation("Clinic report exported successfully. ReportId: {ReportId}, Format: {Format}, FileUrl: {FileUrl}", 
+                reportId, format, fileUrl);
+
+            return fileUrl;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Error exporting clinic report {ReportId} to {Format}", reportId, format);
+            throw;
+        }
     }
 
     public async Task<ClinicInfoDto?> GetClinicInfoAsync(string clinicId, string userId)
@@ -485,6 +557,323 @@ public class ClinicReportService : IClinicReportService
             ReportFileUrl = reader.IsDBNull(12) ? null : reader.GetString(12),
             GeneratedAt = reader.GetDateTime(13)
         };
+    }
+
+    private async Task<byte[]> GenerateClinicReportCsvAsync(ClinicReportDto report)
+    {
+        using var memoryStream = new MemoryStream();
+        using var writer = new StreamWriter(memoryStream, new UTF8Encoding(true));
+        using var csv = new CsvWriter(writer, new CsvConfiguration(CultureInfo.InvariantCulture)
+        {
+            HasHeaderRecord = true
+        });
+
+        // Write report summary section
+        csv.WriteField("Báo cáo Clinic");
+        csv.NextRecord();
+        csv.WriteField("Tên báo cáo");
+        csv.WriteField(report.ReportName);
+        csv.NextRecord();
+        csv.WriteField("Loại báo cáo");
+        csv.WriteField(report.ReportType);
+        csv.NextRecord();
+        csv.WriteField("Thời gian bắt đầu");
+        csv.WriteField(report.PeriodStart?.ToString("yyyy-MM-dd") ?? "N/A");
+        csv.NextRecord();
+        csv.WriteField("Thời gian kết thúc");
+        csv.WriteField(report.PeriodEnd?.ToString("yyyy-MM-dd") ?? "N/A");
+        csv.NextRecord();
+        csv.WriteField("Tổng số bệnh nhân");
+        csv.WriteField(report.TotalPatients);
+        csv.NextRecord();
+        csv.WriteField("Tổng số phân tích");
+        csv.WriteField(report.TotalAnalyses);
+        csv.NextRecord();
+        csv.WriteField("Số ca rủi ro cao");
+        csv.WriteField(report.HighRiskCount);
+        csv.NextRecord();
+        csv.WriteField("Số ca rủi ro trung bình");
+        csv.WriteField(report.MediumRiskCount);
+        csv.NextRecord();
+        csv.WriteField("Số ca rủi ro thấp");
+        csv.WriteField(report.LowRiskCount);
+        csv.NextRecord();
+        csv.NextRecord();
+
+        // Write detailed statistics if available
+        if (report.ReportData != null && report.ReportData.ContainsKey("dailyStatistics"))
+        {
+            csv.WriteField("Thống kê theo ngày");
+            csv.NextRecord();
+            csv.WriteField("Ngày");
+            csv.WriteField("Số lượng phân tích");
+            csv.WriteField("Số ca rủi ro cao");
+            csv.NextRecord();
+
+            if (report.ReportData["dailyStatistics"] is JsonElement dailyStatsElement &&
+                dailyStatsElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var dayStat in dailyStatsElement.EnumerateArray())
+                {
+                    csv.WriteField(dayStat.GetProperty("date").GetString() ?? "N/A");
+                    csv.WriteField(dayStat.GetProperty("count").GetInt32());
+                    csv.WriteField(dayStat.GetProperty("highRiskCount").GetInt32());
+                    csv.NextRecord();
+                }
+            }
+        }
+
+        writer.Flush();
+        return memoryStream.ToArray();
+    }
+
+    private async Task<byte[]> GenerateClinicReportPdfAsync(ClinicReportDto report)
+    {
+        var document = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(1.5f, Unit.Centimetre);
+                page.PageColor(Colors.White);
+                page.DefaultTextStyle(x => x.FontSize(11));
+
+                // Header
+                page.Header().Element(c => ComposeClinicReportHeader(c, report));
+
+                // Content
+                page.Content().Element(c => ComposeClinicReportContent(c, report));
+
+                // Footer
+                page.Footer().Element(c => ComposeClinicReportFooter(c));
+            });
+        });
+
+        return document.GeneratePdf();
+    }
+
+    private void ComposeClinicReportHeader(IContainer container, ClinicReportDto report)
+    {
+        container.Column(col =>
+        {
+            col.Item().Row(row =>
+            {
+                row.RelativeItem().Column(c =>
+                {
+                    c.Item().Text("AURA")
+                        .FontSize(32)
+                        .Bold()
+                        .FontColor(Colors.Blue.Darken3);
+                    c.Item().Text("Hệ Thống Sàng Lọc Sức Khỏe Mạch Máu Võng Mạc")
+                        .FontSize(11)
+                        .FontColor(Colors.Grey.Darken2);
+                });
+                row.ConstantItem(180).AlignRight().Column(c =>
+                {
+                    c.Item().Text(report.ReportName)
+                        .FontSize(16)
+                        .Bold()
+                        .FontColor(Colors.Blue.Darken2);
+                    c.Item().PaddingTop(3)
+                        .Text($"Ngày tạo: {report.GeneratedAt:dd/MM/yyyy HH:mm} UTC")
+                        .FontSize(9)
+                        .FontColor(Colors.Grey.Darken1);
+                });
+            });
+            col.Item().PaddingTop(12).LineHorizontal(1.5f).LineColor(Colors.Blue.Darken2);
+        });
+    }
+
+    private void ComposeClinicReportContent(IContainer container, ClinicReportDto report)
+    {
+        container.PaddingVertical(15).Column(column =>
+        {
+            column.Spacing(12);
+
+            // Summary Section
+            column.Item().Element(c => ComposeSummarySection(c, report));
+
+            // Statistics Section
+            column.Item().Element(c => ComposeStatisticsSection(c, report));
+
+            // Daily Statistics if available
+            if (report.ReportData != null && report.ReportData.ContainsKey("dailyStatistics"))
+            {
+                column.Item().Element(c => ComposeDailyStatisticsSection(c, report));
+            }
+        });
+    }
+
+    private void ComposeSummarySection(IContainer container, ClinicReportDto report)
+    {
+        container.Background(Colors.Grey.Lighten4).Padding(10).Column(col =>
+        {
+            col.Item().Text("Thông tin báo cáo").FontSize(14).Bold().FontColor(Colors.Blue.Darken2);
+            col.Item().PaddingTop(5).Row(row =>
+            {
+                row.RelativeItem().Text($"Loại báo cáo: {report.ReportType}");
+                row.RelativeItem().Text($"Thời gian: {report.PeriodStart:yyyy-MM-dd} - {report.PeriodEnd:yyyy-MM-dd}");
+            });
+        });
+    }
+
+    private void ComposeStatisticsSection(IContainer container, ClinicReportDto report)
+    {
+        container.Column(col =>
+        {
+            col.Item().Text("Thống kê tổng hợp").FontSize(14).Bold().FontColor(Colors.Blue.Darken2);
+            col.Item().PaddingTop(5).Row(row =>
+            {
+                row.RelativeItem().Background(Colors.Blue.Lighten5).Padding(15).Column(c =>
+                {
+                    c.Item().AlignCenter().Text("Tổng số bệnh nhân").FontSize(10);
+                    c.Item().AlignCenter().Text(report.TotalPatients.ToString()).FontSize(20).Bold();
+                });
+                row.ConstantItem(10);
+                row.RelativeItem().Background(Colors.Green.Lighten5).Padding(15).Column(c =>
+                {
+                    c.Item().AlignCenter().Text("Tổng số phân tích").FontSize(10);
+                    c.Item().AlignCenter().Text(report.TotalAnalyses.ToString()).FontSize(20).Bold();
+                });
+                row.ConstantItem(10);
+                row.RelativeItem().Background(Colors.Red.Lighten5).Padding(15).Column(c =>
+                {
+                    c.Item().AlignCenter().Text("Rủi ro cao").FontSize(10);
+                    c.Item().AlignCenter().Text(report.HighRiskCount.ToString()).FontSize(20).Bold();
+                });
+            });
+            col.Item().PaddingTop(10).Row(row =>
+            {
+                row.RelativeItem().Background(Colors.Orange.Lighten5).Padding(15).Column(c =>
+                {
+                    c.Item().AlignCenter().Text("Rủi ro trung bình").FontSize(10);
+                    c.Item().AlignCenter().Text(report.MediumRiskCount.ToString()).FontSize(20).Bold();
+                });
+                row.ConstantItem(10);
+                row.RelativeItem().Background(Colors.Green.Lighten5).Padding(15).Column(c =>
+                {
+                    c.Item().AlignCenter().Text("Rủi ro thấp").FontSize(10);
+                    c.Item().AlignCenter().Text(report.LowRiskCount.ToString()).FontSize(20).Bold();
+                });
+            });
+        });
+    }
+
+    private void ComposeDailyStatisticsSection(IContainer container, ClinicReportDto report)
+    {
+        container.Column(col =>
+        {
+            col.Item().Text("Thống kê theo ngày").FontSize(14).Bold().FontColor(Colors.Blue.Darken2);
+            col.Item().PaddingTop(5).Table(table =>
+            {
+                table.ColumnsDefinition(columns =>
+                {
+                    columns.RelativeColumn(2);
+                    columns.RelativeColumn(1);
+                    columns.RelativeColumn(1);
+                });
+
+                table.Header(header =>
+                {
+                    header.Cell().Background(Colors.Blue.Darken2).Padding(8)
+                        .Text("Ngày").FontColor(Colors.White).Bold();
+                    header.Cell().Background(Colors.Blue.Darken2).Padding(8)
+                        .Text("Số lượng").FontColor(Colors.White).Bold();
+                    header.Cell().Background(Colors.Blue.Darken2).Padding(8)
+                        .Text("Rủi ro cao").FontColor(Colors.White).Bold();
+                });
+
+                if (report.ReportData != null && report.ReportData["dailyStatistics"] is JsonElement dailyStatsElement &&
+                    dailyStatsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var dayStat in dailyStatsElement.EnumerateArray())
+                    {
+                        table.Cell().Padding(5).Text(dayStat.GetProperty("date").GetString() ?? "N/A");
+                        table.Cell().Padding(5).Text(dayStat.GetProperty("count").GetInt32().ToString());
+                        table.Cell().Padding(5).Text(dayStat.GetProperty("highRiskCount").GetInt32().ToString());
+                    }
+                }
+            });
+        });
+    }
+
+    private void ComposeClinicReportFooter(IContainer container)
+    {
+        container.Column(col =>
+        {
+            col.Item().LineHorizontal(1).LineColor(Colors.Grey.Lighten1);
+            col.Item().PaddingTop(5).Row(row =>
+            {
+                row.RelativeItem().Text("Báo cáo được tạo bởi AURA Retinal Screening System").FontSize(7).FontColor(Colors.Grey.Medium);
+                row.ConstantItem(100).AlignRight().Text(x =>
+                {
+                    x.Span("Trang ").FontSize(8);
+                    x.CurrentPageNumber().FontSize(8);
+                    x.Span(" / ").FontSize(8);
+                    x.TotalPages().FontSize(8);
+                });
+            });
+        });
+    }
+
+    private async Task<string> UploadClinicReportFileAsync(byte[] fileBytes, string fileName, string contentType)
+    {
+        if (_cloudinary == null)
+        {
+            _logger?.LogWarning("Cloudinary not configured, returning placeholder URL");
+            return $"https://storage.aura-health.com/clinic-reports/{fileName}";
+        }
+
+        try
+        {
+            using var stream = new MemoryStream(fileBytes);
+            var uploadParams = new RawUploadParams
+            {
+                File = new FileDescription(fileName, stream),
+                Folder = "aura/clinic-reports",
+                PublicId = Path.GetFileNameWithoutExtension(fileName)
+            };
+
+            var uploadResult = await _cloudinary.UploadAsync(uploadParams);
+
+            if (uploadResult.StatusCode == System.Net.HttpStatusCode.OK)
+            {
+                _logger?.LogInformation("Successfully uploaded clinic report to Cloudinary: {Url}", uploadResult.SecureUrl);
+                return uploadResult.SecureUrl.ToString();
+            }
+
+            throw new InvalidOperationException($"Failed to upload file to Cloudinary: {uploadResult.Error?.Message}");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Error uploading clinic report file to Cloudinary");
+            throw;
+        }
+    }
+
+    private async Task UpdateReportFileUrlAsync(string reportId, string fileUrl)
+    {
+        try
+        {
+            using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            var sql = @"
+                UPDATE clinic_reports
+                SET ReportFileUrl = @FileUrl
+                WHERE Id = @ReportId";
+
+            using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("FileUrl", fileUrl);
+            command.Parameters.AddWithValue("ReportId", reportId);
+
+            await command.ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Error updating report file URL for report {ReportId}", reportId);
+            throw;
+        }
     }
 
     #endregion

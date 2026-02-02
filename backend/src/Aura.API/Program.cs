@@ -23,6 +23,7 @@ using Aura.API.Swagger;
 using Aura.Infrastructure.Services.Payment;
 using Hangfire;
 using Hangfire.PostgreSql;
+using Microsoft.Extensions.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -347,6 +348,10 @@ builder.Services.AddScoped<Aura.Application.Services.Clinic.IClinicManagementSer
 // Register background worker services
 builder.Services.AddScoped<Aura.API.Services.BackgroundJobs.AnalysisQueueWorker>();
 builder.Services.AddScoped<Aura.API.Services.BackgroundJobs.RiskAlertWorker>();
+builder.Services.AddScoped<Aura.API.Services.BackgroundJobs.DatabaseBackupWorker>();
+
+// Register database schema fixer (auto-fix missing columns on startup)
+builder.Services.AddScoped<Aura.API.Services.DatabaseSchemaFixer>();
 
 // TODO: Add database context when ready
 // builder.Services.AddDbContext<AuraDbContext>(options =>
@@ -356,6 +361,21 @@ builder.Services.AddScoped<Aura.API.Services.BackgroundJobs.RiskAlertWorker>();
 // builder.Services.AddScoped<IUserRepository, UserRepository>();
 
 var app = builder.Build();
+
+// Auto-fix database schema (missing columns) on startup
+try
+{
+    using (var scope = app.Services.CreateScope())
+    {
+        var schemaFixer = scope.ServiceProvider.GetRequiredService<Aura.API.Services.DatabaseSchemaFixer>();
+        await schemaFixer.FixMissingColumnsAsync();
+    }
+}
+catch (Exception ex)
+{
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    logger.LogWarning(ex, "Database schema fix failed on startup (non-critical, continuing)");
+}
 
 // Configure the HTTP request pipeline
 // Enable Swagger and Swagger UI in all environments so admin can access the docs locally
@@ -466,6 +486,13 @@ using (var scope = app.Services.CreateScope())
         () => scope.ServiceProvider.GetRequiredService<Aura.API.Services.BackgroundJobs.RiskAlertWorker>()
             .CheckAbnormalTrendsAsync(),
         "0 6 * * *"); // Daily at 6:00 AM
+
+    // Daily database backup at 3:00 AM (NFR-6)
+    recurringJobManager.AddOrUpdate(
+        "daily-database-backup",
+        () => scope.ServiceProvider.GetRequiredService<Aura.API.Services.BackgroundJobs.DatabaseBackupWorker>()
+            .PerformDailyBackupAsync(),
+        "0 3 * * *"); // Daily at 3:00 AM
 }
 
 // Health check endpoint with database connection test
