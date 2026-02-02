@@ -416,6 +416,9 @@ app.Use(async (context, next) =>
     await next();
 });
 
+// NFR-1 & NFR-3: đo thời gian xử lý request để đánh giá hiệu năng API
+app.UseMiddleware<RequestTimingMiddleware>();
+
 // Authentication & Authorization middleware
 app.UseAuthentication();
 

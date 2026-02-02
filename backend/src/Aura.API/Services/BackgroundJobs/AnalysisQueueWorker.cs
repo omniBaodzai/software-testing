@@ -56,10 +56,9 @@ public class AnalysisQueueWorker
             // =====================================================================
             // HANGFIRE + RABBITMQ: Process queued analysis jobs
             // Giá trị: Async processing, không block API, reliable retry
+            // FR-24, NFR-2: Hỗ trợ bulk processing ≥100 images per batch
             // =====================================================================
-            await _queueService.ProcessQueuedJobsAsync();
-
-            var processedCount = 0; // TODO: Return from ProcessQueuedJobsAsync
+            var processedCount = await _queueService.ProcessQueuedJobsAsync();
             _logger.LogInformation("[Hangfire] Analysis queue processing completed. Processed: {Count}", processedCount);
         }
         catch (Exception ex)

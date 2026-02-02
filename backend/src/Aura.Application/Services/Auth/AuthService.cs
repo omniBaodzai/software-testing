@@ -1262,13 +1262,47 @@ public class AuthService : IAuthService
     }
 
     // Verify Facebook access token by calling Facebook's Graph API
+    // FR-1: Verify Facebook token với Facebook API để đảm bảo token hợp lệ và thuộc về app của chúng ta
     private async Task<SocialUserInfo?> VerifyFacebookTokenAsync(string accessToken)
     {
         try
         {
             using var httpClient = new HttpClient();
             
-            // Gọi Facebook Graph API để lấy thông tin user (bao gồm name để fallback)
+            // Bước 1: Verify token với app_id và app_secret (nếu có) để đảm bảo token thuộc về app của chúng ta
+            var appId = _configuration["OAuth:Facebook:AppId"];
+            var appSecret = _configuration["OAuth:Facebook:AppSecret"];
+            
+            if (!string.IsNullOrWhiteSpace(appId) && !string.IsNullOrWhiteSpace(appSecret))
+            {
+                // Debug token endpoint để verify token thuộc về app của chúng ta
+                var debugUrl = $"https://graph.facebook.com/debug_token?input_token={accessToken}&access_token={appId}|{appSecret}";
+                var debugResponse = await httpClient.GetAsync(debugUrl);
+                
+                if (debugResponse.IsSuccessStatusCode)
+                {
+                    var debugContent = await debugResponse.Content.ReadAsStringAsync();
+                    var debugResult = System.Text.Json.JsonSerializer.Deserialize<FacebookDebugTokenResponse>(debugContent,
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    
+                    // Kiểm tra token có hợp lệ và thuộc về app của chúng ta không
+                    if (debugResult?.Data == null || 
+                        !debugResult.Data.IsValid || 
+                        debugResult.Data.AppId != appId)
+                    {
+                        _logger.LogWarning("Facebook token verification failed: Invalid token or wrong app_id. Expected: {AppId}, Got: {TokenAppId}",
+                            appId, debugResult?.Data?.AppId);
+                        return null;
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Facebook debug token API failed: {StatusCode}", debugResponse.StatusCode);
+                    // Tiếp tục với /me endpoint như fallback
+                }
+            }
+            
+            // Bước 2: Gọi Facebook Graph API để lấy thông tin user (bao gồm name để fallback)
             var response = await httpClient.GetAsync(
                 $"https://graph.facebook.com/me?fields=id,email,first_name,last_name,name,picture&access_token={accessToken}");
             
@@ -1321,6 +1355,19 @@ public class AuthService : IAuthService
             _logger.LogError(ex, "Error verifying Facebook token");
             return null;
         }
+    }
+
+    // Facebook debug token response model (for token verification)
+    private class FacebookDebugTokenResponse
+    {
+        public FacebookDebugTokenData? Data { get; set; }
+    }
+
+    private class FacebookDebugTokenData
+    {
+        public string? AppId { get; set; }
+        public bool IsValid { get; set; }
+        public string? UserId { get; set; }
     }
 
     // Facebook userinfo response model

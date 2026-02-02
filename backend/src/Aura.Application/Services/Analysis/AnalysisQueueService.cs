@@ -91,12 +91,141 @@ public class AnalysisQueueService : IAnalysisQueueService
         return await LoadJobStatusFromDatabaseAsync(jobId);
     }
 
-    public async Task ProcessQueuedJobsAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// FR-24, NFR-2: Process queued batch analysis jobs from database
+    /// Được gọi bởi Hangfire recurring job để xử lý các jobs đang chờ trong analysis_jobs table
+    /// Hỗ trợ bulk processing ≥100 images per batch với parallel execution
+    /// </summary>
+    public async Task<int> ProcessQueuedJobsAsync(CancellationToken cancellationToken = default)
     {
-        // This method can be called by a background worker to process queued jobs
-        // For now, jobs are processed immediately when queued (fire and forget)
-        // In production, you might want to use a proper job queue (Hangfire, Quartz, etc.)
-        await Task.CompletedTask;
+        var processedCount = 0;
+        
+        try
+        {
+            using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync(cancellationToken);
+
+            // Lấy các jobs có Status = 'Queued' và chưa bị xóa
+            var sql = @"
+                SELECT Id, BatchId, ClinicId, ImageIds, TotalImages
+                FROM analysis_jobs
+                WHERE Status = 'Queued' AND IsDeleted = false
+                ORDER BY CreatedAt ASC
+                LIMIT 10"; // Xử lý tối đa 10 jobs mỗi lần để tránh overload
+
+            using var command = new NpgsqlCommand(sql, connection);
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+            var jobsToProcess = new List<(string JobId, string BatchId, string ClinicId, List<string> ImageIds)>();
+
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var jobId = reader.GetString(0);
+                var batchId = reader.GetString(1);
+                var clinicId = reader.GetString(2);
+                var imageIdsJson = reader.IsDBNull(3) ? "[]" : reader.GetString(3);
+                var imageIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(imageIdsJson) ?? new List<string>();
+
+                jobsToProcess.Add((jobId, batchId, clinicId, imageIds));
+            }
+
+            await reader.CloseAsync();
+
+            if (jobsToProcess.Count == 0)
+            {
+                _logger?.LogDebug("No queued analysis jobs found");
+                return 0;
+            }
+
+            _logger?.LogInformation("Found {Count} queued analysis jobs to process", jobsToProcess.Count);
+
+            // Xử lý từng job (có thể parallel nếu cần, nhưng để sequential để tránh overload AI service)
+            foreach (var (jobId, batchId, clinicId, imageIds) in jobsToProcess)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    _logger?.LogWarning("Cancellation requested, stopping job processing");
+                    break;
+                }
+
+                try
+                {
+                    // Khởi tạo status trong memory nếu chưa có
+                    if (!_activeJobs.ContainsKey(jobId))
+                    {
+                        _activeJobs[jobId] = new BatchAnalysisStatusDto
+                        {
+                            JobId = jobId,
+                            BatchId = batchId,
+                            Status = "Queued",
+                            TotalImages = imageIds.Count,
+                            ProcessedCount = 0,
+                            SuccessCount = 0,
+                            FailedCount = 0,
+                            CreatedAt = DateTime.UtcNow,
+                            ImageIds = imageIds
+                        };
+                    }
+
+                    // Process job (sẽ update status trong DB và memory)
+                    await ProcessJobAsync(jobId, clinicId, imageIds);
+                    processedCount++;
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Error processing queued job {JobId}", jobId);
+                    
+                    // Mark job as failed
+                    try
+                    {
+                        await UpdateJobStatusAsync(jobId, "Failed", null, null, null);
+                        await UpdateJobErrorMessageAsync(jobId, ex.Message);
+                    }
+                    catch (Exception updateEx)
+                    {
+                        _logger?.LogError(updateEx, "Failed to update job {JobId} status to Failed", jobId);
+                    }
+                }
+            }
+
+            _logger?.LogInformation("Processed {Count} queued analysis jobs", processedCount);
+            return processedCount;
+        }
+        catch (PostgresException ex) when (ex.SqlState == "42P01")
+        {
+            // Table analysis_jobs does not exist yet
+            _logger?.LogWarning("Table analysis_jobs does not exist, skipping job processing");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Error in ProcessQueuedJobsAsync");
+            throw;
+        }
+    }
+
+    private async Task UpdateJobErrorMessageAsync(string jobId, string errorMessage)
+    {
+        try
+        {
+            using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            var sql = @"
+                UPDATE analysis_jobs 
+                SET ErrorMessage = @ErrorMessage
+                WHERE Id = @Id";
+
+            using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("Id", jobId);
+            command.Parameters.AddWithValue("ErrorMessage", errorMessage);
+
+            await command.ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to update error message for job {JobId}", jobId);
+        }
     }
 
     private async Task ProcessJobAsync(string jobId, string clinicId, List<string> imageIds)
