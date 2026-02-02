@@ -4,6 +4,7 @@ import ClinicHeader from "../../components/clinic/ClinicHeader";
 import clinicAuthService from "../../services/clinicAuthService";
 import clinicImageService, { ClinicAnalysisResult } from "../../services/clinicImageService";
 import AnalysisResultDisplay from "../../components/analysis/AnalysisResultDisplay";
+import clinicExportService from "../../services/clinicExportService";
 import type { AnalysisResult } from "../../services/analysisService";
 import toast from "react-hot-toast";
 import { getApiErrorMessage } from "../../utils/getApiErrorMessage";
@@ -198,7 +199,12 @@ const ClinicAnalysisResultPage = () => {
             </Link>
           </div>
         </div>
-        <AnalysisResultDisplay result={mapToAnalysisResult(result)} showExport={false} />
+        <AnalysisResultDisplay
+          result={mapToAnalysisResult(result)}
+          showExport={true}
+          exportService={clinicExportService}
+          exportHistoryLink="/clinic/reports"
+        />
       </main>
     </div>
   );

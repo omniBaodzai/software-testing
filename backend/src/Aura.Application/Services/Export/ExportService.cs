@@ -92,15 +92,14 @@ public class ExportService : IExportService
             // Get analysis result (doctors can access any analysis)
             var analysisResult = await GetAnalysisResultOrThrowAsync(analysisResultId, userId, requestedByType);
             
-            // Get user info - for doctors, get the patient's info from the analysis
+            // Get user info - for doctors/clinic, get the patient's info from the analysis
             UserInfoForExport? userInfo = null;
             if (includePatientInfo)
             {
-                // If doctor, get patient info from analysis result's user
-                if (requestedByType == RequesterTypes.Doctor || requestedByType == RequesterTypes.Admin)
+                // If doctor/admin/clinic, get patient info from analysis (ri.UserId = patient)
+                if (requestedByType == RequesterTypes.Doctor || requestedByType == RequesterTypes.Admin || requestedByType == RequesterTypes.Clinic)
                 {
-                    // Get patient's userId from analysis
-                    var patientUserId = await GetAnalysisOwnerUserIdAsync(analysisResultId);
+                    var patientUserId = await GetPatientUserIdForAnalysisAsync(analysisResultId);
                     if (!string.IsNullOrEmpty(patientUserId))
                     {
                         userInfo = await GetUserInfoAsync(patientUserId);
@@ -741,6 +740,11 @@ public class ExportService : IExportService
         if (requestedByType == RequesterTypes.Doctor || requestedByType == RequesterTypes.Admin)
         {
             result = await _analysisService.GetAnalysisResultByIdAsync(analysisResultId);
+        }
+        else if (requestedByType == RequesterTypes.Clinic)
+        {
+            // For clinic, check ri.ClinicId = clinicId (handled by GetAnalysisResultAsync)
+            result = await _analysisService.GetAnalysisResultAsync(analysisResultId, userId);
         }
         else
         {
@@ -1793,6 +1797,36 @@ public class ExportService : IExportService
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Could not retrieve analysis owner for {AnalysisId}", analysisResultId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Get patient userId for an analysis (ri.UserId - the patient whose scan was analyzed).
+    /// For clinic analyses, ar.UserId may be clinicId; ri.UserId is the patient.
+    /// </summary>
+    private async Task<string?> GetPatientUserIdForAnalysisAsync(string analysisResultId)
+    {
+        try
+        {
+            using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            var sql = @"
+                SELECT ri.UserId 
+                FROM analysis_results ar
+                INNER JOIN retinal_images ri ON ar.ImageId = ri.Id
+                WHERE ar.Id = @AnalysisId AND ar.IsDeleted = false";
+
+            using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("AnalysisId", analysisResultId);
+
+            var result = await command.ExecuteScalarAsync();
+            return result as string;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Could not retrieve patient for analysis {AnalysisId}", analysisResultId);
             return null;
         }
     }

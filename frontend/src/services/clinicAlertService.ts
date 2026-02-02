@@ -29,7 +29,7 @@ import type { HighRiskAlert, ClinicAlertSummary, AbnormalTrend } from "./alertSe
 
 const clinicAlertService = {
   async getClinicAlertSummary(): Promise<ClinicAlertSummary> {
-    const response = await clinicAlertsApi.get<ClinicAlertSummary>("/api/alerts/clinic/summary");
+    const response = await clinicAlertsApi.get<ClinicAlertSummary>("alerts/clinic/summary");
     return response.data;
   },
 
@@ -37,21 +37,21 @@ const clinicAlertService = {
     unacknowledgedOnly: boolean = false,
     limit: number = 50
   ): Promise<HighRiskAlert[]> {
-    const response = await clinicAlertsApi.get<HighRiskAlert[]>("/api/alerts/clinic", {
+    const response = await clinicAlertsApi.get<HighRiskAlert[]>("alerts/clinic", {
       params: { unacknowledgedOnly, limit },
     });
     return response.data;
   },
 
   async detectAbnormalTrends(days: number = 30): Promise<AbnormalTrend[]> {
-    const response = await clinicAlertsApi.get<AbnormalTrend[]>("/api/alerts/clinic/abnormal-trends", {
+    const response = await clinicAlertsApi.get<AbnormalTrend[]>("alerts/clinic/abnormal-trends", {
       params: { days },
     });
     return response.data;
   },
 
   async acknowledgeAlert(alertId: string): Promise<void> {
-    await clinicAlertsApi.post(`/api/alerts/${alertId}/acknowledge`);
+    await clinicAlertsApi.post(`alerts/${alertId}/acknowledge`);
   },
 };
 

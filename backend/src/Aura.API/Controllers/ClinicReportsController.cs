@@ -215,6 +215,7 @@ public class ClinicReportsController : ControllerBase
 
     private string? GetCurrentUserId()
     {
+        // Clinic admin: NameIdentifier = adminId
         return User.FindFirstValue(ClaimTypes.NameIdentifier);
     }
 
