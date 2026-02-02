@@ -13,15 +13,18 @@ namespace Aura.API.Controllers;
 public class AdminComplianceController : ControllerBase
 {
     private readonly AuditLogRepository _repo;
+    private readonly PrivacySettingsRepository _privacySettingsRepo;
     private readonly IConfiguration _config;
     private readonly ILogger<AdminComplianceController>? _logger;
 
     public AdminComplianceController(
         AuditLogRepository repo,
+        PrivacySettingsRepository privacySettingsRepo,
         IConfiguration config,
         ILogger<AdminComplianceController>? logger = null)
     {
         _repo = repo;
+        _privacySettingsRepo = privacySettingsRepo;
         _config = config;
         _logger = logger;
     }
@@ -58,24 +61,26 @@ public class AdminComplianceController : ControllerBase
     {
         try
         {
-            // Lấy từ configuration hoặc database (tạm thời dùng config)
-            var settings = new PrivacySettingsDto(
-                EnableAuditLogging: _config.GetValue<bool>("Compliance:EnableAuditLogging", true),
-                AuditLogRetentionDays: _config.GetValue<int>("Compliance:AuditLogRetentionDays", 365),
-                AnonymizeOldLogs: _config.GetValue<bool>("Compliance:AnonymizeOldLogs", false),
-                RequireConsentForDataSharing: _config.GetValue<bool>("Compliance:RequireConsentForDataSharing", true),
-                EnableGdprCompliance: _config.GetValue<bool>("Compliance:EnableGdprCompliance", true),
-                DataRetentionDays: _config.GetValue<int>("Compliance:DataRetentionDays", 2555), // 7 years
-                AllowDataExport: _config.GetValue<bool>("Compliance:AllowDataExport", true),
-                RequireTwoFactorForSensitiveActions: _config.GetValue<bool>("Compliance:RequireTwoFactorForSensitiveActions", false)
-            );
-
+            // FR-37: Lấy từ database (fallback về config nếu DB chưa có)
+            var settings = await _privacySettingsRepo.GetSettingsAsync();
             return Ok(settings);
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Error getting privacy settings");
-            return StatusCode(500, new { message = $"Lỗi khi lấy privacy settings: {ex.Message}" });
+            
+            // Fallback về config nếu DB lỗi
+            var fallbackSettings = new PrivacySettingsDto(
+                EnableAuditLogging: _config.GetValue<bool>("Compliance:EnableAuditLogging", true),
+                AuditLogRetentionDays: _config.GetValue<int>("Compliance:AuditLogRetentionDays", 365),
+                AnonymizeOldLogs: _config.GetValue<bool>("Compliance:AnonymizeOldLogs", false),
+                RequireConsentForDataSharing: _config.GetValue<bool>("Compliance:RequireConsentForDataSharing", true),
+                EnableGdprCompliance: _config.GetValue<bool>("Compliance:EnableGdprCompliance", true),
+                DataRetentionDays: _config.GetValue<int>("Compliance:DataRetentionDays", 2555),
+                AllowDataExport: _config.GetValue<bool>("Compliance:AllowDataExport", true),
+                RequireTwoFactorForSensitiveActions: _config.GetValue<bool>("Compliance:RequireTwoFactorForSensitiveActions", false)
+            );
+            return Ok(fallbackSettings);
         }
     }
 
@@ -84,12 +89,11 @@ public class AdminComplianceController : ControllerBase
     {
         try
         {
-            // Trong thực tế, nên lưu vào database hoặc configuration store
-            // Tạm thời chỉ log và trả về success
-            _logger?.LogInformation("Privacy settings updated: {Settings}", System.Text.Json.JsonSerializer.Serialize(dto));
+            // FR-37: Lưu vào database
+            var adminId = User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            await _privacySettingsRepo.UpdateSettingsAsync(dto, adminId);
             
-            // TODO: Lưu vào database hoặc configuration store
-            // await _settingsRepository.UpdatePrivacySettingsAsync(dto);
+            _logger?.LogInformation("Privacy settings updated by admin {AdminId}: {Settings}", adminId, System.Text.Json.JsonSerializer.Serialize(dto));
             
             return NoContent();
         }

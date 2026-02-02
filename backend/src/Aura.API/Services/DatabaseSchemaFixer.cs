@@ -104,6 +104,9 @@ public class DatabaseSchemaFixer
             // Update existing user_packages to set TotalAnalyses from service_packages
             await UpdateTotalAnalysesFromServicePackagesAsync(connection);
 
+            // Create privacy_settings table if not exists (FR-37)
+            await CreatePrivacySettingsTableIfNotExistsAsync(connection);
+
             _logger.LogInformation("Database schema check completed successfully");
         }
         catch (Exception ex)
@@ -186,6 +189,39 @@ public class DatabaseSchemaFixer
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Error updating TotalAnalyses from service_packages (non-critical)");
+        }
+    }
+
+    private async Task CreatePrivacySettingsTableIfNotExistsAsync(NpgsqlConnection connection)
+    {
+        try
+        {
+            var createTableSql = @"
+                CREATE TABLE IF NOT EXISTS privacy_settings (
+                    Id VARCHAR(255) PRIMARY KEY,
+                    EnableAuditLogging BOOLEAN DEFAULT TRUE,
+                    AuditLogRetentionDays INTEGER DEFAULT 365,
+                    AnonymizeOldLogs BOOLEAN DEFAULT FALSE,
+                    RequireConsentForDataSharing BOOLEAN DEFAULT TRUE,
+                    EnableGdprCompliance BOOLEAN DEFAULT TRUE,
+                    DataRetentionDays INTEGER DEFAULT 2555,
+                    AllowDataExport BOOLEAN DEFAULT TRUE,
+                    RequireTwoFactorForSensitiveActions BOOLEAN DEFAULT FALSE,
+                    IsActive BOOLEAN DEFAULT TRUE,
+                    CreatedDate DATE DEFAULT CURRENT_DATE,
+                    CreatedBy VARCHAR(255),
+                    UpdatedDate DATE DEFAULT CURRENT_DATE,
+                    UpdatedBy VARCHAR(255),
+                    IsDeleted BOOLEAN DEFAULT FALSE
+                )";
+
+            using var cmd = new NpgsqlCommand(createTableSql, connection);
+            await cmd.ExecuteNonQueryAsync();
+            _logger.LogInformation("Created privacy_settings table (if not exists)");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to create privacy_settings table (non-critical)");
         }
     }
 }

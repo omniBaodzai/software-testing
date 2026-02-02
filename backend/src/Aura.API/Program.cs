@@ -332,6 +332,7 @@ builder.Services.AddScoped<Aura.API.Admin.AnalyticsRepository>();
 builder.Services.AddScoped<Aura.API.Admin.AIConfigurationRepository>();
 builder.Services.AddScoped<Aura.API.Admin.ServicePackageRepository>();
 builder.Services.AddScoped<Aura.API.Admin.AuditLogRepository>();
+builder.Services.AddScoped<Aura.API.Admin.PrivacySettingsRepository>();
 builder.Services.AddScoped<Aura.API.Admin.ClinicRepository>();
 builder.Services.AddScoped<Aura.API.Admin.NotificationTemplateRepository>();
 
@@ -345,10 +346,14 @@ builder.Services.AddScoped<Aura.Application.Services.Clinic.IClinicAuthService, 
 // FR-23: Clinic Management (Doctors/Patients)
 builder.Services.AddScoped<Aura.Application.Services.Clinic.IClinicManagementService, Aura.Application.Services.Clinic.ClinicManagementService>();
 
+// NFR-11: Data Anonymization Service
+builder.Services.AddScoped<Aura.Application.Services.Anonymization.IDataAnonymizationService, Aura.Application.Services.Anonymization.DataAnonymizationService>();
+
 // Register background worker services
 builder.Services.AddScoped<Aura.API.Services.BackgroundJobs.AnalysisQueueWorker>();
 builder.Services.AddScoped<Aura.API.Services.BackgroundJobs.RiskAlertWorker>();
 builder.Services.AddScoped<Aura.API.Services.BackgroundJobs.DatabaseBackupWorker>();
+builder.Services.AddScoped<Aura.API.Services.BackgroundJobs.DataAnonymizationWorker>();
 
 // Register database schema fixer (auto-fix missing columns on startup)
 builder.Services.AddScoped<Aura.API.Services.DatabaseSchemaFixer>();
@@ -496,6 +501,13 @@ using (var scope = app.Services.CreateScope())
         () => scope.ServiceProvider.GetRequiredService<Aura.API.Services.BackgroundJobs.DatabaseBackupWorker>()
             .PerformDailyBackupAsync(),
         "0 3 * * *"); // Daily at 3:00 AM
+
+    // Anonymize old audit logs weekly on Sunday at 2:00 AM (NFR-11)
+    recurringJobManager.AddOrUpdate(
+        "anonymize-old-audit-logs",
+        () => scope.ServiceProvider.GetRequiredService<Aura.API.Services.BackgroundJobs.DataAnonymizationWorker>()
+            .AnonymizeOldAuditLogsAsync(),
+        "0 2 * * 0"); // Weekly on Sunday at 2:00 AM
 }
 
 // Health check endpoint with database connection test

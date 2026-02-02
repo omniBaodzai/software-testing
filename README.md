@@ -348,18 +348,60 @@ cp docker.env.example .env.docker
 4. Click "Authorize" ở đầu trang và nhập: `Bearer <your-token>`
 5. Test các endpoints trực tiếp trong Swagger
 
+### Test Email Service (SendGrid)
+
+1. **Cấu hình SendGrid** (xem file `.env`):
+   - `SMTP_USERNAME=apikey`
+   - `SMTP_PASSWORD=<your-sendgrid-api-key>`
+   - `SENDGRID_FROM_EMAIL=<verified-email>`
+
+2. **Test Email Verification**:
+   - Đăng ký tài khoản mới qua `POST /api/auth/register`
+   - Kiểm tra email xác thực trong hộp thư (Inbox + Spam)
+
+3. **Test Password Reset**:
+   - Gọi `POST /api/auth/forgot-password` với email đã đăng ký
+   - Kiểm tra email đặt lại mật khẩu
+
 ### Test Infrastructure
 
 - **RabbitMQ Management**: http://localhost:15672
   - Username: `aura_user`
   - Password: `aura_rabbitmq_2024`
-  - Xem queues và messages
+  - Xem queues: `analysis.queue`, `email.queue`, `notifications.queue`
+  - Monitor messages và consumers
 
 - **Hangfire Dashboard**: http://localhost:5000/hangfire
-  - Xem background jobs và recurring jobs
-  - Monitor job execution
+  - Xem background jobs và recurring jobs:
+    - `process-analysis-queue` (mỗi 5 phút)
+    - `process-email-queue` (mỗi 10 phút)
+    - `check-high-risk-patients` (mỗi giờ)
+    - `daily-database-backup` (3:00 AM hàng ngày)
+    - `anonymize-old-audit-logs` (Chủ nhật 2:00 AM hàng tuần)
+  - Monitor job execution và retry attempts
 
 - **Redis**: Có thể test qua API endpoints (cache sẽ tự động hoạt động)
+
+### Test Performance Monitoring
+
+- **Request Timing**: Mọi API request sẽ được log thời gian xử lý
+  - Xem log: `docker-compose logs backend | findstr "Request timing"`
+  - Các request chậm (>500ms) hoặc API endpoints sẽ được log chi tiết
+
+### Test Batch Analysis (FR-24, NFR-2)
+
+1. **Upload nhiều images** qua Clinic API
+2. **Queue batch analysis** qua `POST /api/clinic/images/batch-analyze`
+3. **Monitor job status** qua `GET /api/clinic/images/batch-status/{jobId}`
+4. **Xem Hangfire Dashboard** để theo dõi processing
+
+### Test Data Anonymization (NFR-11)
+
+1. **Export anonymized training data**:
+   - `GET /api/admin/anonymization/export-training-data?format=json`
+   - `GET /api/admin/anonymization/export-training-data?format=csv`
+2. **Kiểm tra anonymized data** không chứa PII (email, name, user ID)
+3. **Xem background job** anonymize old audit logs trong Hangfire
 
 ---
 
@@ -371,14 +413,17 @@ Truy cập: http://localhost:5000/swagger
 
 ### Các Controllers chính:
 
-- **AuthController**: Đăng ký, đăng nhập, OAuth (Google/Facebook)
+- **AuthController**: Đăng ký, đăng nhập, OAuth (Google/Facebook), email verification, password reset
 - **UserController**: Quản lý user profile
 - **AnalysisController**: Phân tích ảnh, export reports (PDF/CSV/JSON)
-- **DoctorController**: Quản lý doctor profile, statistics
+- **DoctorController**: Quản lý doctor profile, statistics, patient search
 - **PaymentController**: Quản lý packages, payments
 - **MedicalNotesController**: Quản lý medical notes
 - **PatientAssignmentController**: Quản lý patient-doctor assignments
+- **ClinicImagesController**: Bulk upload và batch analysis cho clinic (FR-24)
 - **AdminController**: Admin operations
+- **AdminComplianceController**: Privacy settings, audit logs (FR-37)
+- **AdminAnonymizationController**: Export anonymized data cho AI retraining (NFR-11)
 
 ---
 
@@ -414,11 +459,13 @@ Truy cập: http://localhost:5000/swagger
 ### Infrastructure Services
 
 - **Redis**: Caching (user profiles, analysis results)
-- **RabbitMQ**: Message Queue (async processing, notifications)
-- **Hangfire**: Background Jobs (cleanup, email queue)
+- **RabbitMQ**: Message Queue (async processing, notifications, email queue)
+- **Hangfire**: Background Jobs (analysis queue, email queue, risk alerts, database backup, data anonymization)
+- **SendGrid**: Email Service (SMTP) - Email xác thực, password reset, notifications
 - **Prometheus**: Metrics collection
 - **Grafana**: Monitoring dashboard
 - **Kong**: API Gateway (optional)
+- **DatabaseSchemaFixer**: Tự động fix missing columns khi backend khởi động
 
 ---
 
@@ -509,8 +556,8 @@ docker-compose down -v
 
 ### OAuth Providers
 
-- **Google OAuth**: Đã cấu hình (cần Client Secret nếu muốn dùng)
-- **Facebook OAuth**: Đã cấu hình (cần App Secret nếu muốn dùng)
+- **Google OAuth**: Đã cấu hình và hoạt động (verify token với Google API)
+- **Facebook OAuth**: Đã cấu hình và hoạt động (verify token với Facebook Graph API + Debug Token API)
 
 ### JWT Token
 
@@ -523,26 +570,52 @@ docker-compose down -v
 
 ### ✅ Đã hoàn thành
 
-- [x] Authentication & Authorization (JWT, OAuth)
-- [x] User Management
-- [x] Image Upload & Processing
-- [x] AI Analysis Integration (AI Core Python FastAPI, Batch API, giải thích kết quả tiếng Việt + heatmap từ mô hình)
-- [x] Export Reports (PDF/CSV/JSON)
-- [x] Doctor Management
-- [x] Payment & Packages
-- [x] Medical Notes
-- [x] Patient-Doctor Assignments
-- [x] Redis Caching
-- [x] RabbitMQ Message Queue
-- [x] Hangfire Background Jobs
-- [x] Monitoring (Prometheus + Grafana)
+#### Core Features
+- [x] **Authentication & Authorization** (JWT, OAuth Google/Facebook) - FR-1
+- [x] **User Management** - FR-8
+- [x] **Image Upload & Processing** - FR-2
+- [x] **AI Analysis Integration** (AI Core Python FastAPI, Batch API, giải thích kết quả tiếng Việt + heatmap) - FR-3, FR-4
+- [x] **Export Reports** (PDF/CSV/JSON) - FR-7, FR-30
+- [x] **Doctor Management** - FR-13 đến FR-21
+- [x] **Payment & Packages** - FR-11, FR-12, FR-28
+- [x] **Medical Notes** - FR-16
+- [x] **Patient-Doctor Assignments** - FR-10, FR-20
+- [x] **Clinic Management** - FR-22 đến FR-30
+- [x] **Admin Dashboard** - FR-31 đến FR-39
+
+#### Infrastructure & Performance
+- [x] **Redis Caching** - Tối ưu hiệu năng
+- [x] **RabbitMQ Message Queue** - Async processing, email queue
+- [x] **Hangfire Background Jobs** - Scheduled tasks, recurring jobs
+- [x] **Monitoring** (Prometheus + Grafana) - System metrics
+- [x] **Request Timing Middleware** - Đo thời gian xử lý API (NFR-1, NFR-3)
+- [x] **Batch Analysis Processing** - Hỗ trợ ≥100 images/batch với queue (FR-24, NFR-2)
+
+#### Email & Notifications
+- [x] **Email Service** (SendGrid SMTP) - Email xác thực, đặt lại mật khẩu, thông báo
+- [x] **Email Queue** - Async email sending qua RabbitMQ
+- [x] **Real-time Notifications** (SignalR) - FR-9
+- [x] **Firebase Cloud Messaging** (Push notifications) - Đã tích hợp
+
+#### Security & Compliance
+- [x] **RBAC (Role-Based Access Control)** - FR-32, NFR-12
+- [x] **Audit Logging** - FR-37, NFR-18
+- [x] **Privacy Settings Management** - Lưu vào database (FR-37)
+- [x] **Data Anonymization Pipeline** - Anonymize dữ liệu cho AI retraining (NFR-11)
+- [x] **Database Backup** - Tự động backup hàng ngày (NFR-6)
+
+#### Background Jobs & Automation
+- [x] **Analysis Queue Processing** - Xử lý batch analysis jobs từ database
+- [x] **High-Risk Patient Alerts** - Tự động phát hiện và cảnh báo (FR-29)
+- [x] **Email Queue Processing** - Xử lý email jobs async
+- [x] **Database Backup Worker** - Backup tự động hàng ngày
+- [x] **Data Anonymization Worker** - Anonymize old audit logs theo retention policy
 
 ### 🚧 Đang phát triển
 
-- [ ] Frontend UI hoàn chỉnh
-- [ ] Real-time notifications (SignalR)
-- [ ] Firebase Cloud Messaging (Push notifications)
-- [ ] Advanced analytics dashboard
+- [ ] Frontend UI hoàn chỉnh cho tất cả features
+- [ ] Advanced analytics dashboard với visualizations
+- [ ] Notification templates management UI (FR-39)
 
 ---
 
@@ -589,6 +662,9 @@ Kiểm tra `App__FrontendUrl` trong `docker-compose.yml` và CORS settings trong
 - **Production**: **PHẢI thay đổi** tất cả passwords và secrets trước khi deploy
 - **Cloudinary**: API keys trong `appsettings.json` là development keys (public)
 - **Database**: Schema tự động tạo từ `aura_database_schema.sql` khi container khởi động lần đầu
+- **Email Configuration**: Sử dụng SendGrid SMTP (cấu hình trong `.env`). File `.env` đã được thêm vào `.gitignore` để bảo mật API keys
+- **Database Auto-Fix**: `DatabaseSchemaFixer` tự động tạo các cột thiếu và bảng mới (như `privacy_settings`, `analysis_jobs`) khi backend khởi động
+- **Performance Monitoring**: Request timing middleware tự động log thời gian xử lý cho mọi API request (NFR-1, NFR-3)
 
 ---
 
