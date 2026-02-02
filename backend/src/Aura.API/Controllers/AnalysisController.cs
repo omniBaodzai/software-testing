@@ -449,10 +449,15 @@ public class AnalysisController : ControllerBase
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> DownloadExportFile(string exportId)
     {
         var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized(new { message = "Chưa xác thực người dùng" });
+        if (userId == null) 
+        {
+            _logger.LogWarning("Unauthorized download request: ExportId={ExportId}", exportId);
+            return Unauthorized(new { message = "Chưa xác thực người dùng" });
+        }
 
         try
         {
@@ -469,12 +474,24 @@ public class AnalysisController : ControllerBase
             _logger.LogInformation("Export found: ExportId={ExportId}, ReportType={ReportType}, FileUrl={FileUrl}", 
                 export.ExportId, export.ReportType, export.FileUrl);
 
+            // Check if export is expired
+            if (export.ExpiresAt.HasValue && export.ExpiresAt.Value < DateTime.UtcNow)
+            {
+                _logger.LogWarning("Export expired: ExportId={ExportId}, ExpiresAt={ExpiresAt}", exportId, export.ExpiresAt);
+                return NotFound(new { message = "Báo cáo đã hết hạn. Vui lòng xuất báo cáo mới." });
+            }
+
             // Download file from Cloudinary
+            _logger.LogInformation("Attempting to download file from Cloudinary: ExportId={ExportId}", exportId);
             var fileBytes = await _exportService.DownloadExportFileAsync(exportId, userId);
+            
             if (fileBytes == null || fileBytes.Length == 0)
             {
-                return NotFound(new { message = "Không tìm thấy file" });
+                _logger.LogError("File download returned null or empty: ExportId={ExportId}, FileUrl={FileUrl}", exportId, export.FileUrl);
+                return NotFound(new { message = "Không tìm thấy file trên server. File có thể đã bị xóa hoặc không thể truy cập từ Cloudinary." });
             }
+
+            _logger.LogInformation("File downloaded successfully: ExportId={ExportId}, Size={Size} bytes", exportId, fileBytes.Length);
 
             // Determine content type
             var contentType = export.ReportType.ToUpper() switch
@@ -486,16 +503,30 @@ public class AnalysisController : ControllerBase
             };
 
             // Track download
-            await _exportService.IncrementDownloadCountAsync(exportId, userId);
+            try
+            {
+                await _exportService.IncrementDownloadCountAsync(exportId, userId);
+            }
+            catch (Exception trackEx)
+            {
+                // Don't fail download if tracking fails
+                _logger.LogWarning(trackEx, "Failed to track download count: ExportId={ExportId}", exportId);
+            }
 
-            // Return file
-            var fileName = $"analysis-report-{exportId}.{export.ReportType.ToLower()}";
+            // Return file with proper headers
+            var fileName = export.FileName ?? $"analysis-report-{exportId}.{export.ReportType.ToLower()}";
             return File(fileBytes, contentType, fileName);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error downloading export file {ExportId}", exportId);
-            return StatusCode(500, new { message = "Không thể tải file" });
+            _logger.LogError(ex, "Error downloading export file {ExportId}: {Message}", exportId, ex.Message);
+            
+            // Return more detailed error message
+            var errorMessage = ex.InnerException != null 
+                ? $"Không thể tải file: {ex.Message} ({ex.InnerException.Message})"
+                : $"Không thể tải file: {ex.Message}";
+            
+            return StatusCode(500, new { message = errorMessage });
         }
     }
 

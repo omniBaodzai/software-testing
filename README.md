@@ -403,6 +403,41 @@ cp docker.env.example .env.docker
 2. **Kiểm tra anonymized data** không chứa PII (email, name, user ID)
 3. **Xem background job** anonymize old audit logs trong Hangfire
 
+### Test Firebase Cloud Messaging (Push Notifications)
+
+**Firebase đã được cấu hình sẵn trong Docker!**
+
+1. **Khởi động services**:
+   ```bash
+   docker-compose up -d backend frontend
+   ```
+
+2. **Truy cập frontend**: http://localhost:3000
+
+3. **Login và enable notifications**:
+   - Login vào hệ thống
+   - Browser sẽ tự động request notification permission → Click "Allow"
+   - Device token sẽ được register tự động
+
+4. **Test push notification**:
+   - **Cách 1**: Gọi API test endpoint:
+     ```bash
+     POST http://localhost:5000/api/push-notifications/test
+     # (Cần Authorization header với JWT token)
+     ```
+   - **Cách 2**: Tạo notification bất kỳ trong hệ thống → Push sẽ tự động được gửi
+
+5. **Kiểm tra logs**:
+   ```bash
+   # Backend logs
+   docker-compose logs backend | grep -i "FCM\|Firebase"
+   
+   # Frontend logs (trong browser DevTools Console)
+   # - FCM initialization messages
+   # - Device registration status
+   # - Push notification received
+   ```
+
 ---
 
 ## 📚 API Documentation
@@ -595,7 +630,7 @@ docker-compose down -v
 - [x] **Email Service** (SendGrid SMTP) - Email xác thực, đặt lại mật khẩu, thông báo
 - [x] **Email Queue** - Async email sending qua RabbitMQ
 - [x] **Real-time Notifications** (SignalR) - FR-9
-- [x] **Firebase Cloud Messaging** (Push notifications) - Đã tích hợp
+- [x] **Firebase Cloud Messaging** (Push notifications) - Đã tích hợp hoàn chỉnh với auto-registration và background notifications
 
 #### Security & Compliance
 - [x] **RBAC (Role-Based Access Control)** - FR-32, NFR-12

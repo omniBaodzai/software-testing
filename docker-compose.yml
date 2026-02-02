@@ -442,6 +442,16 @@ services:
         # App Configuration
         - VITE_APP_NAME=AURA
         - VITE_APP_VERSION=1.0.0
+
+        # Firebase Cloud Messaging (Push Notifications)
+        - VITE_FIREBASE_API_KEY=${FIREBASE_API_KEY:-AIzaSyDWfqRLSBpKD7D6V-_Fdijasd0DH-qbyA0}
+        - VITE_FIREBASE_AUTH_DOMAIN=${FIREBASE_AUTH_DOMAIN:-aura-retinal-screening.firebaseapp.com}
+        - VITE_FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-aura-retinal-screening}
+        - VITE_FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET:-aura-retinal-screening.firebasestorage.app}
+        - VITE_FIREBASE_SENDER_ID=${FIREBASE_SENDER_ID:-422595241352}
+        - VITE_FIREBASE_APP_ID=${FIREBASE_APP_ID:-1:422595241352:web:4d4874be8ad1d21f41863d}
+        - VITE_FIREBASE_MEASUREMENT_ID=${FIREBASE_MEASUREMENT_ID:-G-M5XY0P0D3F}
+        - VITE_FIREBASE_VAPID_KEY=${FIREBASE_VAPID_KEY:-BQ_JRe4jSOwOCzYHnvwh54102XBBLQC5rDYfHrOWIDMI63hsc1y06DRI3t3A-6wDcltlgDEKOqMmvbX3G79mFWE}
     container_name: aura-frontend
     restart: unless-stopped
     ports:

@@ -295,7 +295,14 @@ builder.Services.AddScoped<Aura.Application.Services.Reports.IClinicReportServic
 builder.Services.AddScoped<Aura.Application.Services.Doctors.IPatientSearchService, Aura.Application.Services.Doctors.PatientSearchService>();
 
 // Notifications (PostgreSQL backed with real-time streaming)
-builder.Services.AddScoped<Aura.Application.Services.Notifications.INotificationService, Aura.Infrastructure.Services.Notifications.NotificationService>();
+// FR-9: Notification Service với Firebase Cloud Messaging integration
+builder.Services.AddScoped<Aura.Application.Services.Notifications.INotificationService>(sp =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+    var logger = sp.GetService<ILogger<Aura.Infrastructure.Services.Notifications.NotificationService>>();
+    var fcmService = sp.GetService<Aura.Infrastructure.Services.Firebase.IFirebaseMessagingService>();
+    return new Aura.Infrastructure.Services.Notifications.NotificationService(config, logger, fcmService);
+});
 
 // =============================================================================
 // INFRASTRUCTURE: RabbitMQ Message Queue Service

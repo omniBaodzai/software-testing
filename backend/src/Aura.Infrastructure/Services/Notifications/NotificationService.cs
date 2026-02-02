@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using System.Collections.Concurrent;
 using Aura.Application.DTOs.Notifications;
 using Aura.Application.Services.Notifications;
+using Aura.Infrastructure.Services.Firebase;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -11,21 +12,26 @@ namespace Aura.Infrastructure.Services.Notifications;
 
 /// <summary>
 /// NotificationService - Kết nối trực tiếp với PostgreSQL database
-/// Với real-time streaming qua Channel
+/// Với real-time streaming qua Channel và Firebase Cloud Messaging push notifications
 /// </summary>
 public class NotificationService : INotificationService
 {
     private readonly string _connectionString;
     private readonly ILogger<NotificationService>? _logger;
+    private readonly IFirebaseMessagingService? _fcmService;
     
     // Per-user channel for real-time delivery
     private static readonly ConcurrentDictionary<string, Channel<NotificationDto>> _channels = new();
 
-    public NotificationService(IConfiguration configuration, ILogger<NotificationService>? logger = null)
+    public NotificationService(
+        IConfiguration configuration, 
+        ILogger<NotificationService>? logger = null,
+        IFirebaseMessagingService? fcmService = null)
     {
         _connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("Database connection string not configured");
         _logger = logger;
+        _fcmService = fcmService;
     }
 
     private static Channel<NotificationDto> GetOrCreateChannel(string userId)
@@ -66,9 +72,39 @@ public class NotificationService : INotificationService
 
             if (dto != null)
             {
-                // Push to channel for real-time delivery
+                // Push to channel for real-time delivery (SignalR)
                 var ch = GetOrCreateChannel(userId ?? "__global__");
                 await ch.Writer.WriteAsync(dto);
+                
+                // Send Firebase Cloud Messaging push notification (if user has registered device)
+                if (!string.IsNullOrEmpty(userId) && _fcmService != null)
+                {
+                    try
+                    {
+                        // Send to user's topic (all devices subscribed to user_{userId})
+                        var fcmData = new Dictionary<string, string>
+                        {
+                            { "notificationId", notificationId },
+                            { "type", type ?? "general" },
+                            { "userId", userId }
+                        };
+                        
+                        if (data != null)
+                        {
+                            // Reuse dataJson from outer scope or serialize if needed
+                            var fcmDataJson = dataJson ?? System.Text.Json.JsonSerializer.Serialize(data);
+                            fcmData["data"] = fcmDataJson;
+                        }
+
+                        await _fcmService.SendToTopicAsync($"user_{userId}", title, message, fcmData);
+                        _logger?.LogDebug("FCM push notification sent for user {UserId}", userId);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Don't fail notification creation if FCM fails
+                        _logger?.LogWarning(ex, "Failed to send FCM notification for user {UserId}", userId);
+                    }
+                }
                 
                 _logger?.LogInformation("Notification created: {NotificationId} for user {UserId}", notificationId, userId);
             }

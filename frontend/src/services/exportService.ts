@@ -114,53 +114,58 @@ const exportService = {
     try {
       const response = await api.get(`/analysis/exports/${exportId}/download`, {
         responseType: 'blob',
+        validateStatus: (status) => status < 500,
       });
-      
-      // Kiểm tra status code
+
       if (response.status !== 200) {
-        // Nếu không phải 200, có thể là JSON error được parse thành blob
-        const text = await response.data.text();
         try {
+          const text = await response.data.text();
+          const errorData = JSON.parse(text);
+          throw new Error(errorData.message || `Lỗi ${response.status}: Không thể tải file`);
+        } catch {
+          throw new Error(`Lỗi ${response.status}: Không thể tải file`);
+        }
+      }
+
+      const contentType = response.headers['content-type'] || '';
+      if (contentType.includes('application/json')) {
+        try {
+          const text = await response.data.text();
           const errorData = JSON.parse(text);
           throw new Error(errorData.message || 'Không thể tải file');
         } catch {
-          throw new Error('Không thể tải file');
+          throw new Error('Server trả về lỗi không hợp lệ');
         }
       }
-      
-      // Kiểm tra content-type để đảm bảo không phải JSON error
-      const contentType = response.headers['content-type'] || '';
-      if (contentType.includes('application/json')) {
-        // Nếu là JSON, parse để lấy error message
-        const text = await response.data.text();
-        const errorData = JSON.parse(text);
-        throw new Error(errorData.message || 'Không thể tải file');
-      }
-      
-      // Đảm bảo response.data là Blob hợp lệ và có size > 0
+
       if (!(response.data instanceof Blob)) {
         throw new Error('Response không phải là file hợp lệ');
       }
-      
       if (response.data.size === 0) {
         throw new Error('File download trống');
       }
-      
+
       return response.data;
     } catch (error: any) {
-      // Nếu error là AxiosError và có response với blob data
-      if (error.response && error.response.data instanceof Blob) {
-        // Có thể là JSON error được parse thành blob
-        try {
-          const text = await error.response.data.text();
-          const errorData = JSON.parse(text);
-          throw new Error(errorData.message || 'Không thể tải file');
-        } catch {
-          // Không parse được JSON, throw error gốc
-          throw error;
+      if (error.response) {
+        const status = error.response.status;
+        if (error.response.data instanceof Blob) {
+          try {
+            const text = await error.response.data.text();
+            const errorData = JSON.parse(text);
+            throw new Error(errorData.message || `Lỗi ${status}: Không thể tải file`);
+          } catch {
+            throw new Error(`Lỗi ${status}: Không thể tải file từ server`);
+          }
         }
+        if (error.response.data && typeof error.response.data === 'object') {
+          const errorMsg = error.response.data.message || `Lỗi ${status}: Không thể tải file`;
+          throw new Error(errorMsg);
+        }
+        throw new Error(`Lỗi ${status}: ${error.message || 'Không thể tải file'}`);
       }
-      throw error;
+      if (error.message) throw error;
+      throw new Error('Không thể kết nối đến server để tải file');
     }
   },
 

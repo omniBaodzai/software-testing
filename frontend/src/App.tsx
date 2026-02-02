@@ -1,9 +1,14 @@
 import { BrowserRouter } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import AppRoutes from './routes/AppRoutes';
+import { useFirebaseMessaging } from './hooks/useFirebaseMessaging';
+import './utils/checkBrowserSupport'; // Expose browser support check
 import './index.css';
 
 function App() {
+  // Initialize Firebase Cloud Messaging for push notifications
+  useFirebaseMessaging();
+
   return (
     <BrowserRouter>
       <AppRoutes />
