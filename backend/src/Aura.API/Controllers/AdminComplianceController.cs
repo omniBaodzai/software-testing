@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Aura.API.Admin;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -101,6 +102,24 @@ public class AdminComplianceController : ControllerBase
         {
             _logger?.LogError(ex, "Error updating privacy settings");
             return StatusCode(500, new { message = $"Lỗi khi cập nhật privacy settings: {ex.Message}" });
+        }
+    }
+
+    [HttpPost("test/create-sample-logs")]
+    public async Task<ActionResult<object>> CreateSampleLogs()
+    {
+        try
+        {
+            var adminId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+            var count = await _repo.InsertSampleLogsAsync(adminId, ipAddress);
+            _logger?.LogInformation("Created {Count} sample audit logs for admin {AdminId}", count, adminId);
+            return Ok(new { message = "Đã tạo dữ liệu mẫu.", count });
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Error creating sample audit logs");
+            return StatusCode(500, new { message = "Không tạo được dữ liệu mẫu." });
         }
     }
 }

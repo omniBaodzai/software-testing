@@ -64,6 +64,13 @@ const complianceApi = {
   ): Promise<void> => {
     await adminApi.put("/admin/compliance/privacy-settings", dto);
   },
+
+  createSampleLogs: async (): Promise<{ message: string; count: number }> => {
+    const res = await adminApi.post(
+      "/admin/compliance/test/create-sample-logs"
+    );
+    return res.data;
+  },
 };
 
 export default complianceApi;

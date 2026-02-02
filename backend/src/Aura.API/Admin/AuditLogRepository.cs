@@ -23,12 +23,12 @@ public class AuditLogRepository
         {
             if (!string.IsNullOrWhiteSpace(filter.UserId))
             {
-                whereConditions.Add("userid = @userId");
+                whereConditions.Add("(userid = @userId OR (resourcetype = 'User' AND resourceid = @userId))");
                 parameters.Add(new NpgsqlParameter("userId", filter.UserId));
             }
             if (!string.IsNullOrWhiteSpace(filter.DoctorId))
             {
-                whereConditions.Add("doctorid = @doctorId");
+                whereConditions.Add("(doctorid = @doctorId OR (resourcetype = 'Doctor' AND resourceid = @doctorId))");
                 parameters.Add(new NpgsqlParameter("doctorId", filter.DoctorId));
             }
             if (!string.IsNullOrWhiteSpace(filter.AdminId))
@@ -136,12 +136,12 @@ LIMIT @pageSize OFFSET @offset;", conn);
         {
             if (!string.IsNullOrWhiteSpace(filter.UserId))
             {
-                whereConditions.Add("userid = @userId");
+                whereConditions.Add("(userid = @userId OR (resourcetype = 'User' AND resourceid = @userId))");
                 parameters.Add(new NpgsqlParameter("userId", filter.UserId));
             }
             if (!string.IsNullOrWhiteSpace(filter.DoctorId))
             {
-                whereConditions.Add("doctorid = @doctorId");
+                whereConditions.Add("(doctorid = @doctorId OR (resourcetype = 'Doctor' AND resourceid = @doctorId))");
                 parameters.Add(new NpgsqlParameter("doctorId", filter.DoctorId));
             }
             if (!string.IsNullOrWhiteSpace(filter.AdminId))
@@ -366,5 +366,56 @@ AND createddate >= (CURRENT_DATE - INTERVAL '7 days')::DATE;", conn);
             resourceTypeCounts,
             issues
         );
+    }
+
+    /// <summary>Ghi một bản ghi audit log.</summary>
+    public async Task<int> InsertAsync(
+        string? adminId,
+        string actionType,
+        string resourceType,
+        string? resourceId,
+        string? oldValues,
+        string? newValues,
+        string? ipAddress,
+        string? userAgent = null)
+    {
+        var id = Guid.NewGuid().ToString();
+        var now = DateTime.UtcNow;
+        using var conn = _db.OpenConnection();
+        using var cmd = new NpgsqlCommand(@"
+INSERT INTO audit_logs (id, userid, doctorid, adminid, actiontype, resourcetype, resourceid, oldvalues, newvalues, ipaddress, useragent, createddate, createdby)
+VALUES (@id, NULL, NULL, @adminId, @actionType, @resourceType, @resourceId, @oldValues::jsonb, @newValues::jsonb, @ipAddress, @userAgent, @createdDate, @createdBy);", conn);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("adminId", (object?)adminId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("actionType", actionType);
+        cmd.Parameters.AddWithValue("resourceType", resourceType);
+        cmd.Parameters.AddWithValue("resourceId", (object?)resourceId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("oldValues", (object?)(string.IsNullOrWhiteSpace(oldValues) ? null : oldValues) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("newValues", (object?)(string.IsNullOrWhiteSpace(newValues) ? null : newValues) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("ipAddress", (object?)ipAddress ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("userAgent", (object?)userAgent ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("createdDate", now);
+        cmd.Parameters.AddWithValue("createdBy", (object?)adminId ?? DBNull.Value);
+        return await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>Chèn audit log mẫu (test/demo).</summary>
+    public async Task<int> InsertSampleLogsAsync(string? adminId, string? ipAddress = null)
+    {
+        ipAddress ??= "127.0.0.1";
+        var samples = new[]
+        {
+            ("CreatePackage", "ServicePackage", "pkg-sample-1"),
+            ("UpdatePackage", "ServicePackage", "pkg-sample-1"),
+            ("CreateAIConfig", "AIConfiguration", "ai-sample-1"),
+            ("UpdateUser", "User", (string?)null),
+            ("ApproveClinic", "Clinic", "clinic-sample-1"),
+        };
+        var inserted = 0;
+        foreach (var (actionType, resourceType, resourceId) in samples)
+        {
+            inserted += await InsertAsync(adminId, actionType, resourceType, resourceId, null, null, ipAddress);
+        }
+        return inserted;
     }
 }

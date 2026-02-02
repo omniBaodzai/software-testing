@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Aura.API.Admin;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -11,12 +12,14 @@ namespace Aura.API.Controllers;
 public class AdminUsersController : ControllerBase
 {
     private readonly AdminAccountRepository _repo;
+    private readonly AuditLogRepository _auditRepo;
     private readonly IConfiguration _config;
     private readonly ILogger<AdminUsersController>? _logger;
 
-    public AdminUsersController(AdminAccountRepository repo, IConfiguration config, ILogger<AdminUsersController>? logger = null)
+    public AdminUsersController(AdminAccountRepository repo, AuditLogRepository auditRepo, IConfiguration config, ILogger<AdminUsersController>? logger = null)
     {
         _repo = repo;
+        _auditRepo = auditRepo;
         _config = config;
         _logger = logger;
     }
@@ -60,7 +63,19 @@ public class AdminUsersController : ControllerBase
         try
         {
             var n = await _repo.UpdateUserAsync(id, dto);
-            return n == 0 ? NotFound(new { message = "Không tìm thấy user" }) : NoContent();
+            if (n == 0) return NotFound(new { message = "Không tìm thấy user" });
+            var adminId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+            try
+            {
+                var newValuesJson = System.Text.Json.JsonSerializer.Serialize(dto);
+                await _auditRepo.InsertAsync(adminId, "UpdateUser", "User", id, null, newValuesJson, ip);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Không ghi được audit log khi cập nhật user {UserId}", id);
+            }
+            return NoContent();
         }
         catch (Exception ex)
         {
@@ -81,7 +96,19 @@ public class AdminUsersController : ControllerBase
         try
         {
             var n = await _repo.SetUserActiveAsync(id, dto.IsActive.Value);
-            return n == 0 ? NotFound(new { message = "Không tìm thấy user" }) : NoContent();
+            if (n == 0) return NotFound(new { message = "Không tìm thấy user" });
+            var adminId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+            try
+            {
+                var newValuesJson = System.Text.Json.JsonSerializer.Serialize(new { dto.IsActive });
+                await _auditRepo.InsertAsync(adminId, "SetUserStatus", "User", id, null, newValuesJson, ip);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Không ghi được audit log khi đổi trạng thái user {UserId}", id);
+            }
+            return NoContent();
         }
         catch (Exception ex)
         {
