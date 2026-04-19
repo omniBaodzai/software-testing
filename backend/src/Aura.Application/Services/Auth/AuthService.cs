@@ -404,83 +404,86 @@ public class AuthService : IAuthService
         }
     }
 
-    public Task<AuthResponseDto> RefreshTokenAsync(string refreshToken, string? ipAddress = null)
+    public async Task<AuthResponseDto> RefreshTokenAsync(string refreshToken, string? ipAddress = null)
     {
         try
         {
+            // 1. Check refresh token trong memory
             var token = _refreshTokens.FirstOrDefault(t => t.Token == refreshToken);
 
             if (token == null || !token.IsActive)
             {
-                return Task.FromResult(new AuthResponseDto
+                return new AuthResponseDto
                 {
                     Success = false,
                     Message = "Token không hợp lệ hoặc đã hết hạn"
-                });
+                };
             }
 
-            var user = _users.FirstOrDefault(u => u.Id == token.UserId);
-            if (user == null || !user.IsActive)
+            // 2. LẤY USER TỪ DATABASE (FIX LỖI CHÍNH)
+            User? user = null;
+
+            using var conn = OpenConnection();
+            var query = @"
+                SELECT id, email, password, firstname, lastname, phone, authenticationprovider, 
+                    isemailverified, isactive, lastloginat, createddate, profileimageurl,
+                    provideruserid, username, country, dob, gender, address
+                FROM users 
+                WHERE id = @userId AND isdeleted = false";
+
+            using (var cmd = new NpgsqlCommand(query, conn))
             {
-                return Task.FromResult(new AuthResponseDto
+                cmd.Parameters.AddWithValue("userId", token.UserId);
+
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    user = MapUserFromReader(reader);
+                }
+            }
+
+            if (user == null)
+            {
+                return new AuthResponseDto
                 {
                     Success = false,
                     Message = "Người dùng không tồn tại"
-                });
+                };
             }
 
-            // Revoke old refresh token
+            // 3. Revoke token cũ
             token.RevokedAt = DateTime.UtcNow;
             token.RevokedByIp = ipAddress;
             token.ReasonRevoked = "Replaced by new token";
 
-            // Generate new tokens (best-effort: giữ nguyên userType theo DB nếu có)
-            string refreshUserType = "User";
-            string? refreshDoctorId = null;
-            try
-            {
-                using var conn = OpenConnection();
-                var checkDoctorQuery = @"
-                    SELECT id FROM doctors 
-                    WHERE (id = @userId OR email = @email)
-                      AND isdeleted = false AND isactive = true
-                    LIMIT 1";
-                using var doctorCmd = new NpgsqlCommand(checkDoctorQuery, conn);
-                doctorCmd.Parameters.AddWithValue("userId", user.Id);
-                doctorCmd.Parameters.AddWithValue("email", user.Email.ToLower());
-                var doctorResult = doctorCmd.ExecuteScalar();
-                if (doctorResult != null)
-                {
-                    refreshUserType = "Doctor";
-                    refreshDoctorId = doctorResult.ToString();
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "RefreshTokenAsync: failed to resolve doctor id, fallback to User token");
-            }
-
-            var newAccessToken = _jwtService.GenerateAccessToken(user, refreshUserType, refreshDoctorId);
+            // 4. Generate token mới
+            var newAccessToken = _jwtService.GenerateAccessToken(user, "User", null);
             var newRefreshToken = CreateRefreshToken(user.Id, ipAddress);
+
             token.ReplacedByToken = newRefreshToken.Token;
 
-            return Task.FromResult(new AuthResponseDto
+            // 5. Return kết quả
+            return new AuthResponseDto
             {
                 Success = true,
+                Message = "Refresh thành công",
                 AccessToken = newAccessToken,
                 RefreshToken = newRefreshToken.Token,
-                ExpiresAt = DateTime.UtcNow.AddMinutes(int.Parse(_configuration["Jwt:ExpirationMinutes"] ?? "60")),
+                ExpiresAt = DateTime.UtcNow.AddMinutes(
+                    int.Parse(_configuration["Jwt:ExpirationMinutes"] ?? "60")
+                ),
                 User = MapToUserInfo(user)
-            });
+            };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Refresh token failed");
-            return Task.FromResult(new AuthResponseDto
+
+            return new AuthResponseDto
             {
                 Success = false,
                 Message = "Làm mới token thất bại"
-            });
+            };
         }
     }
 
